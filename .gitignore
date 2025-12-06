@@ -1,0 +1,36 @@
+# ========== DEPENDENCIES ==========
+backend/node_modules/
+frontend/node_modules/
+node_modules/
+.pnp
+.pnp.js
+
+# ========== ENVIRONMENT FILES ==========
+backend/.env
+frontend/.env
+*.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# ========== TESTING ==========
+coverage/
+
+# ========== PRODUCTION BUILDS ==========
+backend/build/
+backend/dist/
+frontend/build/
+frontend/dist/
+
+# ========== LOGS ==========
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# ========== SYSTEM FILES ==========
+.DS_Store
+
+# ========== EDITOR FILES ==========
+.vscode/
