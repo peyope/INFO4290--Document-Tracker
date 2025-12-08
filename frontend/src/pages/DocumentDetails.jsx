@@ -332,7 +332,6 @@ export default function DocumentDetails() {
     }
 
     fetchData();
-    
   }, [id]);
 
   const handleChange = (field) => (e) => {
@@ -484,9 +483,7 @@ export default function DocumentDetails() {
     setSuccessMsg("");
 
     try {
-      const { data } = await api.post(
-        `/documents/${id}/confirm-destruction`
-      );
+      const { data } = await api.post(`/documents/${id}/confirm-destruction`);
 
       applyDocumentResponse(data);
       setSuccessMsg("Destruction confirmed and files removed.");
@@ -678,7 +675,9 @@ export default function DocumentDetails() {
                   sx={{ mt: 1 }}
                 >
                   <a
-                    href={`http://localhost:5000/api/documents/${documentData.id}/files/${file.id}?token=${encodeURIComponent(
+                    href={`${api.defaults.baseURL || ""}/documents/${
+                      documentData.id
+                    }/files/${file.id}?token=${encodeURIComponent(
                       downloadToken
                     )}`}
                     target="_blank"
