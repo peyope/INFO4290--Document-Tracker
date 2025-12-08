@@ -12,7 +12,7 @@ import pool from "../config/db.js";
  */
 export const getDashboardSummary = async (req, res) => {
   try {
-    // --- 1. Load system settings (due soon days, etc.) ---
+    // Load system settings (due soon days, etc.) 
     let defaultRetentionYears = 10;
     let dueSoonDays = 30;
 
@@ -40,7 +40,7 @@ export const getDashboardSummary = async (req, res) => {
       );
     }
 
-    // --- 2. Run all the core queries in parallel ---
+    // Run all the core queries in parallel
     const [
       totalsRes,
       pendingReqRes,
@@ -96,6 +96,8 @@ export const getDashboardSummary = async (req, res) => {
       ),
 
       // Documents that need a retention decision soon
+      // NOTE: now we include any doc with a retention_date within the window,
+      // even if it already has a retention_action (e.g., extended earlier).
       pool.query(
         `
         SELECT
@@ -110,7 +112,6 @@ export const getDashboardSummary = async (req, res) => {
         WHERE d.status <> 'Destroyed'
           AND d.retention_date IS NOT NULL
           AND d.retention_date <= CURRENT_DATE + ($1::int) * INTERVAL '1 day'
-          AND (d.retention_action IS NULL OR d.retention_action = '')
         ORDER BY d.retention_date ASC
         LIMIT 5
         `,

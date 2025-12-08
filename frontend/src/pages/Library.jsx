@@ -59,6 +59,13 @@ const RETENTION_ACTION_FILTERS = [
   { value: "Archive", label: "Archive / Keep" },
 ];
 
+// NEW: status filter options for active/destroyed/all
+const STATUS_FILTER_OPTIONS = [
+  { value: "active", label: "Active Files" },
+  { value: "destroyed", label: "Destroyed Files" },
+  { value: "all", label: "All Files" },
+];
+
 const SIDEBAR_WIDTH = 240;
 const HEADER_HEIGHT = 64;
 
@@ -143,6 +150,9 @@ export default function Library() {
   const [q, setQ] = useState("");
   const [retentionFilter, setRetentionFilter] = useState("all");
   const [retentionActionFilter, setRetentionActionFilter] = useState("all");
+
+  // NEW: status filter (default: active → hides destroyed)
+  const [statusFilter, setStatusFilter] = useState("active");
 
   // System settings driven
   const [dueSoonDays, setDueSoonDays] = useState(30);
@@ -239,15 +249,20 @@ export default function Library() {
   // Reset to first page when filters/search change
   useEffect(() => {
     setPage(0);
-  }, [q, retentionFilter, retentionActionFilter]);
+  }, [q, retentionFilter, retentionActionFilter, statusFilter]);
 
   // --- filtering ---
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
 
     return docs.filter((d) => {
-      // Hide destroyed docs by default
-      if (d.status === "Destroyed") return false;
+      // NEW: status filter logic
+      if (statusFilter === "active" && d.status === "Destroyed") {
+        return false;
+      }
+      if (statusFilter === "destroyed" && d.status !== "Destroyed") {
+        return false;
+      }
 
       if (needle) {
         const title = (d.title || "").toLowerCase();
@@ -275,7 +290,7 @@ export default function Library() {
 
       return true;
     });
-  }, [docs, q, retentionFilter, retentionActionFilter, dueSoonDays]);
+  }, [docs, q, retentionFilter, retentionActionFilter, statusFilter, dueSoonDays]);
 
   // --- sorting ---
   const sorted = useMemo(() => {
@@ -443,6 +458,23 @@ export default function Library() {
             value={q}
             onChange={(e) => setQ(e.target.value)}
           />
+
+          {/* NEW: status filter */}
+          <FormControl size="small" sx={{ minWidth: 180 }}>
+            <InputLabel id="status-filter-label">Status</InputLabel>
+            <Select
+              labelId="status-filter-label"
+              label="Status"
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+            >
+              {STATUS_FILTER_OPTIONS.map((opt) => (
+                <MenuItem key={opt.value} value={opt.value}>
+                  {opt.label}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
 
           <FormControl size="small" sx={{ minWidth: 180 }}>
             <InputLabel id="retention-filter-label">Retention</InputLabel>

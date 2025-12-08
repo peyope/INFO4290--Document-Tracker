@@ -35,7 +35,15 @@ function formatDateTime(dateString) {
   return d.toLocaleString();
 }
 
-/* ---------- Document audit helpers (for dashboard) ---------- */
+// File Checkout Days Out 
+function formatDaysOut(days) {
+  if (days === null || days === undefined) return "—";
+  if (days === 0) return "Checked out today";
+  if (days === 1) return "Checked out yesterday";
+  return `Out for ${days} days`;
+}
+
+//Document audit helpers 
 
 const DOC_AUDIT_FIELD_LABELS = {
   title: "Title",
@@ -81,16 +89,14 @@ function formatDocAuditValue(field, raw) {
   return String(raw);
 }
 
-// Turns the note JSON into a multi-line human-readable summary
 function formatDocAuditDetails(note) {
   if (!note) return "";
-
   let obj = note;
+
   if (typeof note === "string") {
     try {
       obj = JSON.parse(note);
     } catch {
-      // Not JSON – just show the raw note
       return note;
     }
   }
@@ -136,7 +142,7 @@ function formatDocAuditDetails(note) {
   return lines.join("\n");
 }
 
-/* ---------- Admin activity helpers (for dashboard) ---------- */
+//Admin activity helpers 
 
 const ADMIN_FIELD_LABELS = {
   email: "Email",
@@ -153,8 +159,8 @@ const ADMIN_FIELD_LABELS = {
 
 function formatAdminDetails(details) {
   if (!details) return "";
-
   let obj = details;
+
   if (typeof details === "string") {
     try {
       obj = JSON.parse(details);
@@ -183,11 +189,8 @@ function formatAdminDetails(details) {
     const label = ADMIN_FIELD_LABELS[key] || key;
     let value = rawVal;
 
-    if (Array.isArray(value)) {
-      value = value.join(", ");
-    } else if (typeof value === "object") {
-      value = JSON.stringify(value);
-    }
+    if (Array.isArray(value)) value = value.join(", ");
+    else if (typeof value === "object") value = JSON.stringify(value);
 
     lines.push(`${label}: ${value}`);
   }
@@ -195,15 +198,13 @@ function formatAdminDetails(details) {
   return lines.join("\n");
 }
 
-/* ---------- Component ---------- */
+//Component 
 
 export default function Dashboard() {
   const navigate = useNavigate();
   const { user } = useContext(AuthContext);
 
   const roles = user?.roles || [];
-
-  // Who can see audit panels (Clerk excluded)
   const canSeeAudit = roles.some((r) =>
     ["Admin", "Manager", "SuperAdmin"].includes(r)
   );
@@ -344,33 +345,29 @@ export default function Dashboard() {
 
       {/* ROW 1: Retention + Checked-out */}
       <Grid container spacing={2}>
-        {/* Retention decisions (read-only) */}
+
+        {/* Retention */}
         <Grid item xs={12} md={6}>
-          <Paper sx={{ p: 2, height: "100%" }}>
+          <Paper sx={{ p: 2, height:"100%" }}>
             <Stack
               direction="row"
               alignItems="center"
               justifyContent="space-between"
-              sx={{ mb: 1 }}
+              sx={{ mb:1 }}
             >
               <Typography variant="h6">Retention Decisions</Typography>
             </Stack>
 
             <Typography variant="body2" color="text.secondary">
-              Files approaching or past their retention date. Click a file to
-              review its retention plan.
+              Files approaching or past their retention date. Click a file to review its retention plan.
             </Typography>
 
             {needsDecision.length === 0 ? (
-              <Typography
-                variant="body2"
-                color="text.secondary"
-                sx={{ mt: 1 }}
-              >
+              <Typography variant="body2" color="text.secondary" sx={{ mt:1 }}>
                 No files require a retention decision right now.
               </Typography>
             ) : (
-              <Table size="small" sx={{ mt: 1 }}>
+              <Table size="small" sx={{ mt:1 }}>
                 <TableHead>
                   <TableRow>
                     <TableCell>Title</TableCell>
@@ -382,7 +379,7 @@ export default function Dashboard() {
                     <TableRow
                       key={doc.id}
                       hover
-                      sx={{ cursor: "pointer" }}
+                      sx={{ cursor:"pointer" }}
                       onClick={() => navigate(`/documents/${doc.id}`)}
                     >
                       <TableCell>{doc.title}</TableCell>
@@ -394,21 +391,17 @@ export default function Dashboard() {
             )}
 
             {settings?.due_soon_days != null && (
-              <Typography
-                variant="caption"
-                color="text.secondary"
-                sx={{ mt: 1, display: "block" }}
-              >
+              <Typography variant="caption" color="text.secondary" sx={{ mt:1, display:"block" }}>
                 “Due soon” means within {settings.due_soon_days} days.
               </Typography>
             )}
           </Paper>
         </Grid>
 
-        {/* Checked-out files */}
+        {/* Checked-Out Files */}
         <Grid item xs={12} md={6}>
-          <Paper sx={{ p: 2, height: "100%" }}>
-            <Typography variant="h6" sx={{ mb: 0.5 }}>
+          <Paper sx={{ p:2, height:"100%" }}>
+            <Typography variant="h6" sx={{ mb:0.5 }}>
               Checked-Out Files
             </Typography>
             <Typography variant="body2" color="text.secondary">
@@ -416,15 +409,11 @@ export default function Dashboard() {
             </Typography>
 
             {checkoutItems.length === 0 ? (
-              <Typography
-                variant="body2"
-                color="text.secondary"
-                sx={{ mt: 2 }}
-              >
+              <Typography variant="body2" color="text.secondary" sx={{ mt:2 }}>
                 No files are currently checked out.
               </Typography>
             ) : (
-              <Table size="small" sx={{ mt: 1 }}>
+              <Table size="small" sx={{ mt:1 }}>
                 <TableHead>
                   <TableRow>
                     <TableCell>Title</TableCell>
@@ -437,14 +426,16 @@ export default function Dashboard() {
                     <TableRow
                       key={c.id}
                       hover
-                      sx={{ cursor: "pointer" }}
+                      sx={{ cursor:"pointer" }}
                       onClick={() => navigate(`/documents/${c.id}`)}
                     >
                       <TableCell>{c.title}</TableCell>
                       <TableCell>{c.holder_name || "—"}</TableCell>
-                      <TableCell>
-                        {c.days_out != null ? c.days_out : "—"}
-                      </TableCell>
+
+                      {/* ---------- UPDATED Days Out Display ---------- */}
+                      <TableCell>{formatDaysOut(c.days_out)}</TableCell>
+                      {/* --------------------------------------------- */}
+
                     </TableRow>
                   ))}
                 </TableBody>
@@ -452,11 +443,7 @@ export default function Dashboard() {
             )}
 
             {checkouts.longest_open_days != null && (
-              <Typography
-                variant="caption"
-                color="text.secondary"
-                sx={{ mt: 1, display: "block" }}
-              >
+              <Typography variant="caption" color="text.secondary" sx={{ mt:1, display:"block" }}>
                 Longest open check-out: {checkouts.longest_open_days} days.
               </Typography>
             )}
@@ -464,15 +451,16 @@ export default function Dashboard() {
         </Grid>
       </Grid>
 
-      {/* ROW 2: Audit panels (hidden for Clerk) */}
+      {/* ROW 2: Audit Panels */}
       {canSeeAudit && (
-        <Grid container spacing={2} sx={{ mt: 8 }}>
+        <Grid container spacing={2} sx={{ mt:8 }}>
           {/* Recent Document Activity */}
           <Grid item xs={12} md={6}>
-            <Paper sx={{ p: 2, height: "100%" }}>
-              <Typography variant="h6" sx={{ mb: 1 }}>
+            <Paper sx={{ p:2, height:"100%" }}>
+              <Typography variant="h6" sx={{ mb:1 }}>
                 Recent Document Activity
               </Typography>
+
               {docEvents.length === 0 ? (
                 <Typography variant="body2" color="text.secondary">
                   No recent document changes.
@@ -492,19 +480,13 @@ export default function Dashboard() {
                       >
                         <Typography variant="body2">
                           <strong>{ev.action}</strong>{" "}
-                          {ev.actor_email && (
-                            <>
-                              by <em>{ev.actor_email}</em>
-                            </>
-                          )}
+                          {ev.actor_email && <>by <em>{ev.actor_email}</em></>}
                         </Typography>
-                        <Typography
-                          variant="caption"
-                          color="text.secondary"
-                          sx={{ display: "block" }}
-                        >
+
+                        <Typography variant="caption" color="text.secondary" sx={{ display:"block" }}>
                           {formatDateTime(ev.created_at)}
                         </Typography>
+
                         {detailsText && (
                           <Typography
                             variant="caption"
@@ -528,10 +510,11 @@ export default function Dashboard() {
 
           {/* Recent Admin Activity */}
           <Grid item xs={12} md={6}>
-            <Paper sx={{ p: 2, height: "100%" }}>
-              <Typography variant="h6" sx={{ mb: 1 }}>
+            <Paper sx={{ p:2, height:"100%" }}>
+              <Typography variant="h6" sx={{ mb:1 }}>
                 Recent Admin Activity
               </Typography>
+
               {adminEvents.length === 0 ? (
                 <Typography variant="body2" color="text.secondary">
                   No recent admin changes.
@@ -544,40 +527,29 @@ export default function Dashboard() {
                       <Box
                         key={ev.id}
                         sx={{
-                          borderBottom: "1px solid",
-                          borderColor: "divider",
-                          pb: 0.5,
+                          borderBottom:"1px solid",
+                          borderColor:"divider",
+                          pb:0.5,
                         }}
                       >
                         <Typography variant="body2">
                           <strong>{ev.action_type}</strong>{" "}
-                          {ev.actor_email && (
-                            <>
-                              by <em>{ev.actor_email}</em>
-                            </>
-                          )}
-                          {ev.target_email && (
-                            <>
-                              {" "}
-                              on <em>{ev.target_email}</em>
-                            </>
-                          )}
+                          {ev.actor_email && <>by <em>{ev.actor_email}</em></>}
+                          {ev.target_email && <> on <em>{ev.target_email}</em></>}
                         </Typography>
-                        <Typography
-                          variant="caption"
-                          color="text.secondary"
-                          sx={{ display: "block" }}
-                        >
+
+                        <Typography variant="caption" color="text.secondary" sx={{ display:"block" }}>
                           {formatDateTime(ev.created_at)}
                         </Typography>
+
                         {detailsText && (
                           <Typography
                             variant="caption"
                             color="text.secondary"
                             sx={{
-                              display: "block",
-                              whiteSpace: "pre-wrap",
-                              mt: 0.25,
+                              display:"block",
+                              whiteSpace:"pre-wrap",
+                              mt:0.25,
                             }}
                           >
                             {detailsText}
