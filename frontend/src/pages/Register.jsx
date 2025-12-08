@@ -122,7 +122,7 @@ export default function RequestAccess() {
         <Stack sx={{ mt: 3 }} alignItems="center">
           <Button
             component={RouterLink}
-            to="/"          // 👈 this matches your Login route in App.js
+            to="/"          
             variant="text"
             size="small"
           >

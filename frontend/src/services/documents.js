@@ -1,81 +1,89 @@
 // frontend/src/services/documents.js
 import api from "../api/axiosConfig";
 
-/* ------------ core documents ------------ */
-
-export async function listDocuments(params = {}) {
-  const { q, site, status } = params;
-  const { data } = await api.get("/documents", {
-    params: { q, site, status },
-  });
-  return data;
+/* ---------------------------------------------------------
+   GET ALL DOCUMENTS
+--------------------------------------------------------- */
+export async function listDocuments() {
+  const { data } = await api.get("/documents");
+  return data || [];
 }
 
+/* ---------------------------------------------------------
+   GET SINGLE DOCUMENT WITH FILES + AUDIT
+--------------------------------------------------------- */
 export async function getDocument(id) {
   const { data } = await api.get(`/documents/${id}`);
-  return data;
+
+  return {
+    document: data.document || data,
+    files: data.files || [],
+    audit: data.audit || [],
+  };
 }
 
+/* ---------------------------------------------------------
+   CREATE DOCUMENT
+--------------------------------------------------------- */
 export async function createDocument(payload) {
   const { data } = await api.post("/documents", payload);
-  return data;
+
+  return {
+    document: data.document || data,
+    files: data.files || [],
+    audit: data.audit || [],
+  };
 }
 
+/* ---------------------------------------------------------
+   UPDATE DOCUMENT
+--------------------------------------------------------- */
 export async function updateDocument(id, payload) {
-  const { data } = await api.put(`/documents/${id}`, payload);
-  return data;
+  const cleanPayload = {
+    title: payload.title ?? null,
+    location: payload.location ?? null,
+    site: payload.site ?? null,
+    status: payload.status ?? null,
+    description: payload.description ?? null,
+    retention_date: payload.retention_date ?? null,
+    file_closed_date: payload.file_closed_date ?? null,
+    owner_id: payload.owner_id ?? null,
+    holder_id: payload.holder_id ?? null,
+  };
+
+  const { data } = await api.put(`/documents/${id}`, cleanPayload);
+
+  return {
+    document: data.document,
+    files: data.files || [],
+    audit: data.audit || [],
+  };
 }
 
-/* ------------ digital files ------------ */
-
-export async function listDocumentFiles(documentId) {
-  const { data } = await api.get(`/documents/${documentId}/files`);
-  return data;
+/* ---------------------------------------------------------
+   DELETE DOCUMENT
+--------------------------------------------------------- */
+export async function deleteDocument(id) {
+  await api.delete(`/documents/${id}`);
 }
 
-export async function uploadDocumentFile(documentId, file) {
+/* ---------------------------------------------------------
+   UPLOAD FILE
+--------------------------------------------------------- */
+export async function uploadDocumentFile(id, file) {
   const formData = new FormData();
   formData.append("file", file);
 
-  const { data } = await api.post(
-    `/documents/${documentId}/files`,
-    formData,
-    {
-      headers: {
-        "Content-Type": "multipart/form-data",
-      },
-    }
-  );
+  const { data } = await api.post(`/documents/${id}/files`, formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
 
   return data;
 }
 
-/**
- * Delete a digital file.
- *
- * Backend route:
- *   DELETE /api/documents/files/:fileId
- */
-export async function deleteDocumentFile(documentId, fileId) {
-  await api.delete(`/documents/files/${fileId}`);
-}
-
-/**
- * Build a download URL.
- *
- * Backend route:
- *   GET /api/documents/files/:fileId
- */
-export function getDocumentFileUrl(documentId, fileId) {
-  const base = api.defaults.baseURL || "";
-  const token = localStorage.getItem("token");
-
-  const url = `${base}/documents/files/${fileId}`;
-
-  if (token) {
-    const encoded = encodeURIComponent(token);
-    return `${url}?token=${encoded}`;
-  }
-
-  return url;
+/* ---------------------------------------------------------
+   DELETE FILE
+--------------------------------------------------------- */
+export async function deleteDocumentFile(docId, fileId) {
+  await api.delete(`/documents/${docId}/files/${fileId}`);
 }

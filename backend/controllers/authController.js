@@ -116,7 +116,7 @@ export const loginUser = async (req, res) => {
       return res.status(403).json({ message: "Account is deactivated" });
     }
 
-    // 🔐 Force-change gate (admin has reset this account)
+    // Force-change gate (admin has reset this account)
     if (user.must_change_password) {
       return res.status(403).json({
         message:

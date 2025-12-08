@@ -14,10 +14,8 @@ const linkSx = (active) => ({
   borderRadius: 12,
   px: 2,
   py: 1.25,
-  color: active ? "primary.main" : "text.primary",
-  backgroundColor: active ? "action.selected" : "transparent",
-  "&:hover": { backgroundColor: "action.hover" },
   width: "100%",
+  justifyItems: "flex-start",
 });
 
 export default function LeftNav() {
@@ -30,30 +28,35 @@ export default function LeftNav() {
   const isManager = roles.includes("Manager");
   const isClerk = roles.includes("Clerk");
 
-  // Per your spec: Managers & Clerks → only library
-  const canSeeDashboard = isSuperAdmin || isAdmin;
+  // Managers & Clerks → only library,
+  // Admins & SuperAdmins → dashboard + admin.
+  const canSeeDashboard = isSuperAdmin || isAdmin ||isClerk || isManager;
   const canSeeAdmin = isSuperAdmin || isAdmin;
+
+  // Everyone with a role can see Employees + Library.
+  const canSeeEmployees =
+    isSuperAdmin || isAdmin || isManager || isClerk;
 
   return (
     <Box
-      sx={(theme) => ({
-        width: SIDEBAR_WIDTH,
+      sx={{
         position: "fixed",
         top: HEADER_HEIGHT,
-        bottom: 0,
         left: 0,
-        backgroundColor: theme.palette.background.paper,
-        borderRight: `1px solid ${theme.palette.divider}`,
-        zIndex: theme.zIndex.appBar + 1,
+        width: SIDEBAR_WIDTH,
+        bottom: 0,
+        borderRight: 1,
+        borderColor: "divider",
+        bgcolor: "background.paper",
         px: 2,
-        py: 2,
-        overflowY: "auto",
-      })}
+        py: 3,
+      }}
     >
-      <Typography variant="subtitle2" sx={{ mb: 2, color: "text.secondary" }}>
-        Navigation
-      </Typography>
-      <Stack spacing={1}>
+      <Stack spacing={2} alignItems="flex-start">
+        <Typography variant="overline" color="text.secondary">
+          Navigation
+        </Typography>
+
         {canSeeDashboard && (
           <Button
             component={NavLink}
@@ -71,6 +74,16 @@ export default function LeftNav() {
         >
           Document Library
         </Button>
+
+        {canSeeEmployees && (
+          <Button
+            component={NavLink}
+            to="/employees"
+            sx={linkSx(location.pathname.startsWith("/employees"))}
+          >
+            Employees
+          </Button>
+        )}
 
         {canSeeAdmin && (
           <Button

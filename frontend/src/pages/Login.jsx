@@ -53,7 +53,7 @@ export default function Login() {
       const status = e2?.response?.status;
       const data = e2?.response?.data;
 
-      // 🔐 Special case: admin reset → must change password
+      // Special case: admin reset → must change password
       if (status === 403 && data?.must_change_password && data?.userId) {
         setMustChange(true);
         setPendingUserId(data.userId);
@@ -92,7 +92,7 @@ export default function Login() {
 
     setChangeLoading(true);
     try {
-      // ✅ Match your backend route + payload:
+      // Match backend route + payload:
       // POST /api/auth/change-password
       await api.post("/auth/change-password", {
         userId: Number(userId),
@@ -106,7 +106,7 @@ export default function Login() {
       setConfirmNewPassword("");
       setPassword(""); // clear old temp password
 
-      // ✅ DO NOT auto-login.
+      // DO NOT auto-login.
       // Just tell the user to sign in with the new password.
       setSuccessMsg("Password updated. Please log in with your new password.");
     } catch (e2) {
@@ -205,7 +205,7 @@ export default function Login() {
         </Box>
       </Container>
 
-      {/* 🔒 Forced password change modal */}
+      {/* Forced password change modal */}
       <Dialog
         open={mustChange}
         onClose={() => {

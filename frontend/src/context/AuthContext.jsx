@@ -42,7 +42,7 @@ export const AuthProvider = ({ children }) => {
     setUser(u);
 
     // go to library
-    navigate("/library", { replace: true });
+    navigate("/dashboard", { replace: true });
   };
 
   const logout = () => {

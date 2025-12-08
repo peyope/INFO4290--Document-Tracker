@@ -2,7 +2,7 @@
 import express from "express";
 import pool from "../config/db.js";
 import { protect } from "../middleware/authMiddleware.js";
-import { requireRole } from "../middleware/authorizeMiddleware.js"; // assumes you have this
+import { requireRole } from "../middleware/authorizeMiddleware.js"; 
 
 const router = express.Router();
 
@@ -30,7 +30,7 @@ router.get(
         "SELECT COUNT(*)::int AS cnt FROM documents WHERE site='Offsite'"
       );
 
-      // ✅ New: documents whose retention date is within the next 30 days
+      //  documents whose retention date is within the next 30 days
       // (includes overdue documents as well since they are <= now + 30 days)
       const { rows: dueSoonRows } = await pool.query(
         `
@@ -46,7 +46,7 @@ router.get(
         checkedOut: checkedOutRows[0]?.cnt ?? 0,
         available: availableRows[0]?.cnt ?? 0,
         offsite: offsiteRows[0]?.cnt ?? 0,
-        dueSoon: dueSoonRows[0]?.cnt ?? 0, // 👈 used for the alert
+        dueSoon: dueSoonRows[0]?.cnt ?? 0, 
       });
     } catch (err) {
       console.error("GET /api/stats error:", err);

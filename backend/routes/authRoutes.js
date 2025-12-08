@@ -1,7 +1,7 @@
 // backend/routes/authRoutes.js
 import express from "express";
 import {
-  registerUser,    // kept in case you ever want to use it internally
+  registerUser, // optional / internal
   loginUser,
   changePassword,
   requestAccess,
@@ -9,17 +9,17 @@ import {
 
 const router = express.Router();
 
-// 🔓 Public: request access instead of self-registration
+// Public: access request form
 router.post("/request-access", requestAccess);
 
-// (Optional) If you really want to keep direct registration for internal use,
-// you could keep this, but for your current requirement we're not exposing it.
+// (Optional) direct registration – not used by your UI right now
 // router.post("/register", registerUser);
 
-// Standard login
+// Public: normal login
 router.post("/login", loginUser);
 
-// When a user must change password after admin reset
+// Public: forced password change after admin reset
+// NO protect() here – user does NOT have a token yet
 router.post("/change-password", changePassword);
 
 export default router;

@@ -8,15 +8,15 @@ export default function ProtectedRoute({ children, requireRoles }) {
   const location = useLocation();
 
   if (loading) {
-    return null; // or a spinner if you prefer
+    return null; 
   }
 
-  // Normal auth guard
+  
   if (!user) {
     return <Navigate to="/" replace state={{ from: location }} />;
   }
 
-  // Optional role check
+  
   if (
     requireRoles &&
     (!user.roles || !user.roles.some((r) => requireRoles.includes(r)))

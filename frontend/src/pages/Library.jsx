@@ -1,4 +1,5 @@
-import React, { useContext, useEffect, useMemo, useState } from "react";
+// frontend/src/pages/Library.jsx
+import React, { useEffect, useMemo, useState, useContext } from "react";
 import {
   Box,
   Paper,
@@ -20,57 +21,62 @@ import {
   TableRow,
   TableCell,
   TableBody,
-  Checkbox,
+  FormGroup,
   FormControlLabel,
+  Checkbox,
   IconButton,
+  Menu,
+  TableSortLabel,
+  TablePagination,
 } from "@mui/material";
-import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
-import ArrowDownwardIcon from "@mui/icons-material/ArrowDownward";
+import MoreVertIcon from "@mui/icons-material/MoreVert";
 import { useNavigate } from "react-router-dom";
-import { listDocuments, createDocument } from "../services/documents";
+import {
+  listDocuments,
+  createDocument,
+  deleteDocument,
+} from "../services/documents";
 import { AuthContext } from "../context/AuthContext";
-import { getLibraryColumns, saveLibraryColumns } from "../services/settings";
+import api from "../api/axiosConfig";
 
 const SITE_OPTIONS = ["Onsite", "Offsite"];
 const STATUS_OPTIONS = ["Available", "CheckedOut"];
 
-// retention filter options
 const RETENTION_FILTERS = [
   { value: "all", label: "All retention" },
   { value: "overdue", label: "Overdue" },
-  { value: "soon", label: "Due in 30 days" },
+  // label for "soon" will be overridden at render-time using dueSoonDays
+  { value: "soon", label: "Due soon" },
   { value: "none", label: "No retention date" },
 ];
 
-// column definitions (id + label). Visibility/order is stored in settings.
-const DEFAULT_COLUMN_DEFS = [
-  { id: "id", label: "ID" },
-  { id: "title", label: "Title" },
-  { id: "site", label: "Site" },
-  { id: "location", label: "Location" },
-  { id: "owner", label: "File Lead" },
-  { id: "holder", label: "Checked-Out By" },
-  { id: "status", label: "Status" },
-  { id: "retention", label: "Retention" },
+// filter by retention decision (action)
+const RETENTION_ACTION_FILTERS = [
+  { value: "all", label: "All decisions" },
+  { value: "none", label: "No decision recorded" },
+  { value: "Destroy", label: "Destroy / Dispose" },
+  { value: "Extend", label: "Extend retention" },
+  { value: "Archive", label: "Archive / Keep" },
 ];
 
-// === layout offsets (must match Header + LeftNav) ===
 const SIDEBAR_WIDTH = 240;
 const HEADER_HEIGHT = 64;
 
-// ---- retention status helper (for display) ----
-function getRetentionStatus(doc) {
-  if (!doc.due_at) {
+/**
+ * Compute retention status string + color.
+ * Uses system "due soon" threshold (dueSoonDays).
+ */
+function getRetentionStatus(doc, dueSoonDays) {
+  if (!doc.retention_date) {
     return { label: "Not set", color: "text.secondary" };
   }
 
-  const due = new Date(doc.due_at);
+  const due = new Date(doc.retention_date);
   if (Number.isNaN(due.getTime())) {
     return { label: "Invalid date", color: "error.main" };
   }
 
   const today = new Date();
-  // compare by date only
   today.setHours(0, 0, 0, 0);
   due.setHours(0, 0, 0, 0);
 
@@ -83,7 +89,7 @@ function getRetentionStatus(doc) {
       color: "error.main",
     };
   }
-  if (diffDays <= 30) {
+  if (diffDays <= dueSoonDays) {
     return {
       label: `Due soon (${diffDays}d)`,
       color: "warning.main",
@@ -95,11 +101,13 @@ function getRetentionStatus(doc) {
   };
 }
 
-// ---- retention bucket helper (for filtering) ----
-function getRetentionBucket(doc) {
-  if (!doc.due_at) return "none";
+/**
+ * Bucket used for retention filter.
+ */
+function getRetentionBucket(doc, dueSoonDays) {
+  if (!doc.retention_date) return "none";
 
-  const due = new Date(doc.due_at);
+  const due = new Date(doc.retention_date);
   if (Number.isNaN(due.getTime())) return "none";
 
   const today = new Date();
@@ -110,54 +118,41 @@ function getRetentionBucket(doc) {
   const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
 
   if (diffDays < 0) return "overdue";
-  if (diffDays <= 30) return "soon";
+  if (diffDays <= dueSoonDays) return "soon";
   return "future";
 }
 
-// merge backend columns with defaults (preserve order, labels)
-function mergeColumnConfig(configColumns) {
-  const fallback = DEFAULT_COLUMN_DEFS.map((c) => ({ ...c, visible: true }));
-
-  if (!Array.isArray(configColumns) || configColumns.length === 0) {
-    return fallback;
-  }
-
-  const byId = new Map(DEFAULT_COLUMN_DEFS.map((c) => [c.id, c]));
-  const out = [];
-
-  for (const col of configColumns) {
-    const base = byId.get(col.id);
-    if (!base) continue;
-    out.push({
-      ...base,
-      visible: typeof col.visible === "boolean" ? col.visible : true,
-    });
-    byId.delete(col.id);
-  }
-
-  // append any default columns not present
-  for (const remaining of byId.values()) {
-    out.push({ ...remaining, visible: true });
-  }
-
-  return out;
-}
+const DEFAULT_COLUMN_CONFIG = {
+  id: { key: "id", label: "ID", visible: true },
+  title: { key: "title", label: "Title", visible: true },
+  site: { key: "site", label: "Site", visible: true },
+  location: { key: "location", label: "Location", visible: true },
+  owner: { key: "owner", label: "Owner", visible: true },
+  status: { key: "status", label: "Status", visible: true },
+  retention: { key: "retention", label: "Retention", visible: true },
+};
 
 export default function Library() {
   const navigate = useNavigate();
   const { user } = useContext(AuthContext);
-  const roles = user?.roles || [];
-  const isSuperAdmin = roles.includes("SuperAdmin");
 
   const [docs, setDocs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
 
-  // search + filters
   const [q, setQ] = useState("");
   const [retentionFilter, setRetentionFilter] = useState("all");
+  const [retentionActionFilter, setRetentionActionFilter] = useState("all");
 
-  // New File dialog
+  // System settings driven
+  const [dueSoonDays, setDueSoonDays] = useState(30);
+  const [rowsPerPage, setRowsPerPage] = useState(50);
+
+  // Table pagination & sorting
+  const [page, setPage] = useState(0);
+  const [sortField, setSortField] = useState("id");
+  const [sortDir, setSortDir] = useState("asc");
+
   const [open, setOpen] = useState(false);
   const [nfTitle, setNfTitle] = useState("");
   const [nfSite, setNfSite] = useState("Onsite");
@@ -165,14 +160,63 @@ export default function Library() {
   const [nfStatus, setNfStatus] = useState("Available");
   const [saving, setSaving] = useState(false);
 
-  // Column settings state
-  const [columns, setColumns] = useState(
-    DEFAULT_COLUMN_DEFS.map((c) => ({ ...c, visible: true }))
-  );
-  const [columnsDialogOpen, setColumnsDialogOpen] = useState(false);
-  const [draftColumns, setDraftColumns] = useState([]);
-  const [savingColumns, setSavingColumns] = useState(false);
-  const [columnsError, setColumnsError] = useState("");
+  const [openCustomize, setOpenCustomize] = useState(false);
+  const [columnConfig, setColumnConfig] = useState(DEFAULT_COLUMN_CONFIG);
+
+  const [menuAnchorEl, setMenuAnchorEl] = useState(null);
+  const [menuDocId, setMenuDocId] = useState(null);
+
+  const canManage =
+    user?.roles?.includes("Admin") ||
+    user?.roles?.includes("Manager") ||
+    user?.roles?.includes("Clerk") ||
+    user?.roles?.includes("SuperAdmin");
+
+  // Load persisted column config
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("libraryColumnConfig");
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        setColumnConfig((prev) => ({
+          ...prev,
+          ...parsed,
+        }));
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const persistColumnConfig = (next) => {
+    setColumnConfig(next);
+    try {
+      localStorage.setItem("libraryColumnConfig", JSON.stringify(next));
+    } catch {
+      // ignore
+    }
+  };
+
+  // Load system settings (due soon + page size)
+  useEffect(() => {
+    async function loadSettings() {
+      try {
+        const res = await api.get("/settings/system");
+        const days = Number(res?.data?.due_soon_days);
+        if (Number.isFinite(days) && days > 0) {
+          setDueSoonDays(days);
+        }
+        const size = Number(res?.data?.library_page_size);
+        if (Number.isFinite(size) && size > 0) {
+          setRowsPerPage(size);
+          setPage(0);
+        }
+      } catch (e) {
+        console.warn("Failed to load system settings for library", e?.message);
+      }
+    }
+    loadSettings();
+  }, []);
 
   const fetchDocs = async () => {
     setErr("");
@@ -188,41 +232,105 @@ export default function Library() {
     }
   };
 
-  const loadColumns = async () => {
-    try {
-      const data = await getLibraryColumns();
-      const merged = mergeColumnConfig(data?.columns);
-      setColumns(merged);
-    } catch (e) {
-      console.error("GET /settings/library-columns failed:", e);
-      // keep defaults; no user-facing error needed
-    }
-  };
-
   useEffect(() => {
     fetchDocs();
-    loadColumns();
   }, []);
 
+  // Reset to first page when filters/search change
+  useEffect(() => {
+    setPage(0);
+  }, [q, retentionFilter, retentionActionFilter]);
+
+  // --- filtering ---
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
 
     return docs.filter((d) => {
-      // title search
-      if (needle && !(d.title || "").toLowerCase().includes(needle)) {
+      // Hide destroyed docs by default
+      if (d.status === "Destroyed") return false;
+
+      if (needle) {
+        const title = (d.title || "").toLowerCase();
+        if (!title.includes(needle)) {
+          return false;
+        }
+      }
+
+      // retention-date bucket filter
+      const bucket = getRetentionBucket(d, dueSoonDays);
+      if (retentionFilter === "overdue" && bucket !== "overdue") return false;
+      if (retentionFilter === "soon" && bucket !== "soon") return false;
+      if (retentionFilter === "none" && bucket !== "none") return false;
+
+      // retention decision filter
+      const action = d.retention_action || null;
+      if (retentionActionFilter === "none" && action) return false;
+      if (
+        retentionActionFilter !== "all" &&
+        retentionActionFilter !== "none" &&
+        action !== retentionActionFilter
+      ) {
         return false;
       }
 
-      // retention filter
-      const bucket = getRetentionBucket(d);
-      if (retentionFilter === "all") return true;
-      if (retentionFilter === "overdue") return bucket === "overdue";
-      if (retentionFilter === "soon") return bucket === "soon";
-      if (retentionFilter === "none") return bucket === "none";
-
       return true;
     });
-  }, [docs, q, retentionFilter]);
+  }, [docs, q, retentionFilter, retentionActionFilter, dueSoonDays]);
+
+  // --- sorting ---
+  const sorted = useMemo(() => {
+    const items = [...filtered];
+
+    const getSortValue = (d, field) => {
+      switch (field) {
+        case "id":
+          return d.id ?? 0;
+        case "title":
+          return (d.title || "").toLowerCase();
+        case "site":
+          return d.site || "";
+        case "location":
+          return d.location || "";
+        case "owner":
+          return (d.owner_name || d.owner_email || "").toLowerCase();
+        case "status":
+          return d.status || "";
+        case "retention":
+          if (!d.retention_date) return Number.POSITIVE_INFINITY;
+          const t = new Date(d.retention_date).getTime();
+          return Number.isNaN(t) ? Number.POSITIVE_INFINITY : t;
+        default:
+          return "";
+      }
+    };
+
+    items.sort((a, b) => {
+      const va = getSortValue(a, sortField);
+      const vb = getSortValue(b, sortField);
+
+      if (va < vb) return sortDir === "asc" ? -1 : 1;
+      if (va > vb) return sortDir === "asc" ? 1 : -1;
+      return 0;
+    });
+
+    return items;
+  }, [filtered, sortField, sortDir]);
+
+  // --- pagination ---
+  const pagedDocs = useMemo(() => {
+    const start = page * rowsPerPage;
+    return sorted.slice(start, start + rowsPerPage);
+  }, [sorted, page, rowsPerPage]);
+
+  // proper toggle: click column → asc, click again → desc
+  const handleSort = (field) => {
+    if (sortField === field) {
+      setSortDir((prev) => (prev === "asc" ? "desc" : "asc"));
+    } else {
+      setSortField(field);
+      setSortDir("asc");
+    }
+  };
 
   const onCreate = async (e) => {
     e?.preventDefault?.();
@@ -232,87 +340,76 @@ export default function Library() {
       setErr("Title is required.");
       return;
     }
+    if (!SITE_OPTIONS.includes(nfSite)) {
+      setErr("Site must be Onsite or Offsite.");
+      return;
+    }
+    if (!STATUS_OPTIONS.includes(nfStatus)) {
+      setErr("Status must be Available or CheckedOut.");
+      return;
+    }
 
-    setSaving(true);
     try {
-      const payload = {
+      setSaving(true);
+      await createDocument({
         title: nfTitle.trim(),
         site: nfSite,
-        location: nfLocation.trim() || null,
+        location: nfLocation.trim() || undefined,
         status: nfStatus,
-      };
-      const created = await createDocument(payload);
-      setDocs((prev) => [created, ...prev]);
-
+      });
       setOpen(false);
       setNfTitle("");
-      setNfSite("Onsite");
       setNfLocation("");
+      setNfSite("Onsite");
       setNfStatus("Available");
-    } catch (e2) {
-      console.error("POST /documents failed:", e2);
-      setErr(e2?.response?.data?.message || "Failed to create document.");
+      await fetchDocs();
+    } catch (e) {
+      console.error("POST /documents failed:", e);
+      setErr(e?.response?.data?.message || "Failed to save document.");
     } finally {
       setSaving(false);
     }
   };
 
-  // ---- column dialog handlers ----
-  const handleOpenColumnsDialog = () => {
-    setColumnsError("");
-    setDraftColumns(columns.map((c) => ({ ...c })));
-    setColumnsDialogOpen(true);
+  const orderedColumns = [
+    columnConfig.id,
+    columnConfig.title,
+    columnConfig.site,
+    columnConfig.location,
+    columnConfig.owner,
+    columnConfig.status,
+    columnConfig.retention,
+  ];
+
+  const visibleColumnCount =
+    orderedColumns.filter((c) => c.visible).length + (canManage ? 1 : 0);
+
+  const handleOpenMenu = (event, docId) => {
+    event.stopPropagation();
+    setMenuAnchorEl(event.currentTarget);
+    setMenuDocId(docId);
   };
 
-  const handleCloseColumnsDialog = () => {
-    setColumnsDialogOpen(false);
+  const handleCloseMenu = () => {
+    setMenuAnchorEl(null);
+    setMenuDocId(null);
   };
 
-  const handleToggleColumnVisible = (id) => {
-    setDraftColumns((prev) =>
-      prev.map((c) => (c.id === id ? { ...c, visible: !c.visible } : c))
-    );
-  };
-
-  const moveColumn = (id, direction) => {
-    setDraftColumns((prev) => {
-      const index = prev.findIndex((c) => c.id === id);
-      if (index === -1) return prev;
-      const swapWith = direction === "up" ? index - 1 : index + 1;
-      if (swapWith < 0 || swapWith >= prev.length) return prev;
-
-      const next = [...prev];
-      const temp = next[index];
-      next[index] = next[swapWith];
-      next[swapWith] = temp;
-      return next;
-    });
-  };
-
-  const handleSaveColumns = async () => {
-    if (!draftColumns.some((c) => c.visible)) {
-      setColumnsError("At least one column must be visible.");
-      return;
-    }
-
-    setSavingColumns(true);
-    setColumnsError("");
+  const handleDeleteDocument = async () => {
+    if (!menuDocId) return;
     try {
-      const { columns: saved } = await saveLibraryColumns(draftColumns);
-      const merged = mergeColumnConfig(saved);
-      setColumns(merged);
-      setColumnsDialogOpen(false);
+      await deleteDocument(menuDocId);
+      await fetchDocs();
     } catch (e) {
-      console.error("PUT /settings/library-columns failed:", e);
-      setColumnsError(
-        e?.response?.data?.message || "Failed to save column settings."
-      );
+      console.error("DELETE /documents failed:", e);
+      setErr(e?.response?.data?.message || "Failed to delete document.");
     } finally {
-      setSavingColumns(false);
+      handleCloseMenu();
     }
   };
 
-  const visibleColumns = columns.filter((c) => c.visible);
+  // Label for "Due soon" option based on system setting
+  const dueSoonLabel = `Due in ${dueSoonDays} days`;
 
   return (
     <Box
@@ -327,7 +424,6 @@ export default function Library() {
         backgroundColor: "background.default",
       }}
     >
-      {/* Header row */}
       <Box
         sx={{
           mb: 2,
@@ -335,14 +431,15 @@ export default function Library() {
           justifyContent: "space-between",
           alignItems: "center",
           gap: 2,
+          flexWrap: "wrap",
         }}
       >
         <Typography variant="h5">Document Library</Typography>
 
-        <Stack direction="row" spacing={1} alignItems="center">
+        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
           <TextField
             size="small"
-            placeholder="Search by title..."
+            placeholder="Search by title…"
             value={q}
             onChange={(e) => setQ(e.target.value)}
           />
@@ -357,17 +454,34 @@ export default function Library() {
             >
               {RETENTION_FILTERS.map((opt) => (
                 <MenuItem key={opt.value} value={opt.value}>
+                  {opt.value === "soon" ? dueSoonLabel : opt.label}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+
+          {/* retention decision filter */}
+          <FormControl size="small" sx={{ minWidth: 180 }}>
+            <InputLabel id="retention-action-filter-label">
+              Decision
+            </InputLabel>
+            <Select
+              labelId="retention-action-filter-label"
+              label="Decision"
+              value={retentionActionFilter}
+              onChange={(e) => setRetentionActionFilter(e.target.value)}
+            >
+              {RETENTION_ACTION_FILTERS.map((opt) => (
+                <MenuItem key={opt.value} value={opt.value}>
                   {opt.label}
                 </MenuItem>
               ))}
             </Select>
           </FormControl>
 
-          {isSuperAdmin && (
-            <Button variant="outlined" onClick={handleOpenColumnsDialog}>
-              Customize Columns
-            </Button>
-          )}
+          <Button variant="outlined" onClick={() => setOpenCustomize(true)}>
+            Customize columns
+          </Button>
 
           <Button variant="contained" onClick={() => setOpen(true)}>
             New File
@@ -385,31 +499,42 @@ export default function Library() {
         <Table>
           <TableHead>
             <TableRow>
-              {visibleColumns.map((col) => (
-                <TableCell key={col.id}>{col.label}</TableCell>
-              ))}
+              {orderedColumns
+                .filter((col) => col.visible)
+                .map((col) => (
+                  <TableCell
+                    key={col.key}
+                    sortDirection={sortField === col.key ? sortDir : false}
+                  >
+                    <TableSortLabel
+                      active={sortField === col.key}
+                      direction={sortField === col.key ? sortDir : "asc"}
+                      onClick={() => handleSort(col.key)}
+                    >
+                      {col.label}
+                    </TableSortLabel>
+                  </TableCell>
+                ))}
+              {canManage && <TableCell />}
             </TableRow>
           </TableHead>
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={visibleColumns.length}>
+                <TableCell colSpan={visibleColumnCount}>
                   Loading…
                 </TableCell>
               </TableRow>
-            ) : filtered.length === 0 ? (
+            ) : pagedDocs.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={visibleColumns.length}>
+                <TableCell colSpan={visibleColumnCount}>
                   No documents found.
                 </TableCell>
               </TableRow>
             ) : (
-              filtered.map((d) => {
-                const retention = getRetentionStatus(d);
-                const fileLeadDisplay =
-                  d.owner_name || d.owner_email || "—";
-                const holderDisplay =
-                  d.holder_name || d.holder_email || "—";
+              pagedDocs.map((d) => {
+                const retention = getRetentionStatus(d, dueSoonDays);
+                const ownerDisplay = d.owner_name || d.owner_email || "—";
 
                 return (
                   <TableRow
@@ -418,122 +543,83 @@ export default function Library() {
                     sx={{ cursor: "pointer" }}
                     onClick={() => navigate(`/documents/${d.id}`)}
                   >
-                    {visibleColumns.map((col) => {
-                      switch (col.id) {
-                        case "id":
-                          return <TableCell key="id">{d.id}</TableCell>;
-                        case "title":
-                          return <TableCell key="title">{d.title}</TableCell>;
-                        case "site":
-                          return <TableCell key="site">{d.site}</TableCell>;
-                        case "location":
-                          return (
-                            <TableCell key="location">
-                              {d.location || "-"}
-                            </TableCell>
-                          );
-                        case "owner":
-                          return (
-                            <TableCell key="owner">
-                              {fileLeadDisplay}
-                            </TableCell>
-                          );
-                        case "holder":
-                          return (
-                            <TableCell key="holder">
-                              {holderDisplay}
-                            </TableCell>
-                          );
-                        case "status":
-                          return (
-                            <TableCell key="status">{d.status}</TableCell>
-                          );
-                        case "retention":
-                          return (
-                            <TableCell
-                              key="retention"
-                              sx={{ color: retention.color }}
-                            >
-                              {retention.label}
-                            </TableCell>
-                          );
-                        default:
-                          return null;
-                      }
-                    })}
+                    {orderedColumns
+                      .filter((col) => col.visible)
+                      .map((col) => {
+                        switch (col.key) {
+                          case "id":
+                            return <TableCell key="id">{d.id}</TableCell>;
+                          case "title":
+                            return (
+                              <TableCell key="title">{d.title}</TableCell>
+                            );
+                          case "site":
+                            return (
+                              <TableCell key="site">{d.site}</TableCell>
+                            );
+                          case "location":
+                            return (
+                              <TableCell key="location">
+                                {d.location || "-"}
+                              </TableCell>
+                            );
+                          case "owner":
+                            return (
+                              <TableCell key="owner">
+                                {ownerDisplay}
+                              </TableCell>
+                            );
+                          case "status":
+                            return (
+                              <TableCell key="status">
+                                {d.status}
+                              </TableCell>
+                            );
+                          case "retention":
+                            return (
+                              <TableCell
+                                key="retention"
+                                sx={{ color: retention.color }}
+                              >
+                                {retention.label}
+                              </TableCell>
+                            );
+                          default:
+                            return null;
+                        }
+                      })}
+                    {canManage && (
+                      <TableCell key="actions" align="right">
+                        <IconButton
+                          size="small"
+                          onClick={(e) => handleOpenMenu(e, d.id)}
+                        >
+                          <MoreVertIcon />
+                        </IconButton>
+                      </TableCell>
+                    )}
                   </TableRow>
                 );
               })
             )}
           </TableBody>
         </Table>
+
+        {/* pagination bar */}
+        <TablePagination
+          component="div"
+          count={sorted.length}
+          page={page}
+          onPageChange={(_e, newPage) => setPage(newPage)}
+          rowsPerPage={rowsPerPage}
+          onRowsPerPageChange={(e) => {
+            const value = parseInt(e.target.value, 10) || 10;
+            setRowsPerPage(value);
+            setPage(0);
+          }}
+          rowsPerPageOptions={[5, 10, 25, 50, 100]}
+        />
       </Paper>
-
-      {/* Column settings dialog */}
-      <Dialog
-        open={columnsDialogOpen}
-        onClose={handleCloseColumnsDialog}
-        fullWidth
-        maxWidth="sm"
-      >
-        <DialogTitle>Customize Columns</DialogTitle>
-        <DialogContent sx={{ pt: 2 }}>
-          {columnsError && (
-            <Alert severity="error" sx={{ mb: 2 }}>
-              {columnsError}
-            </Alert>
-          )}
-
-          <Stack spacing={1}>
-            {draftColumns.map((col, index) => (
-              <Box
-                key={col.id}
-                sx={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                }}
-              >
-                <FormControlLabel
-                  control={
-                    <Checkbox
-                      checked={col.visible}
-                      onChange={() => handleToggleColumnVisible(col.id)}
-                    />
-                  }
-                  label={col.label}
-                />
-                <Box>
-                  <IconButton
-                    size="small"
-                    onClick={() => moveColumn(col.id, "up")}
-                    disabled={index === 0}
-                  >
-                    <ArrowUpwardIcon fontSize="inherit" />
-                  </IconButton>
-                  <IconButton
-                    size="small"
-                    onClick={() => moveColumn(col.id, "down")}
-                    disabled={index === draftColumns.length - 1}
-                  >
-                    <ArrowDownwardIcon fontSize="inherit" />
-                  </IconButton>
-                </Box>
-              </Box>
-            ))}
-          </Stack>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={handleCloseColumnsDialog}>Cancel</Button>
-          <Button
-            onClick={handleSaveColumns}
-            variant="contained"
-            disabled={savingColumns}
-          >
-            {savingColumns ? "Saving…" : "Save"}
-          </Button>
-        </DialogActions>
-      </Dialog>
 
       {/* New File dialog */}
       <Dialog
@@ -549,7 +635,6 @@ export default function Library() {
               label="Title *"
               value={nfTitle}
               onChange={(e) => setNfTitle(e.target.value)}
-              fullWidth
               autoFocus
               required
             />
@@ -601,6 +686,101 @@ export default function Library() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* Customize columns dialog */}
+      <Dialog
+        open={openCustomize}
+        onClose={() => setOpenCustomize(false)}
+        fullWidth
+        maxWidth="sm"
+      >
+        <DialogTitle>Customize Columns</DialogTitle>
+        <DialogContent sx={{ pt: 2 }}>
+          <Typography variant="body2" sx={{ mb: 2 }}>
+            Show or hide columns and optionally rename the labels. These
+            settings are saved in your browser only.
+          </Typography>
+
+          <FormGroup>
+            {orderedColumns.map((col) => (
+              <Box
+                key={col.key}
+                sx={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 2,
+                  mb: 1.5,
+                }}
+              >
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      checked={columnConfig[col.key].visible}
+                      onChange={(e) => {
+                        const next = {
+                          ...columnConfig,
+                          [col.key]: {
+                            ...columnConfig[col.key],
+                            visible: e.target.checked,
+                          },
+                        };
+                        persistColumnConfig(next);
+                      }}
+                    />
+                  }
+                  label="Visible"
+                />
+                <TextField
+                  size="small"
+                  label="Column label"
+                  value={columnConfig[col.key].label}
+                  onChange={(e) => {
+                    const next = {
+                      ...columnConfig,
+                      [col.key]: {
+                        ...columnConfig[col.key],
+                        label: e.target.value,
+                      },
+                    };
+                    persistColumnConfig(next);
+                  }}
+                />
+              </Box>
+            ))}
+          </FormGroup>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setOpenCustomize(false)}>Close</Button>
+          <Button
+            onClick={() => {
+              persistColumnConfig(DEFAULT_COLUMN_CONFIG);
+            }}
+          >
+            Reset to defaults
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Actions menu for each document */}
+      <Menu
+        anchorEl={menuAnchorEl}
+        open={Boolean(menuAnchorEl)}
+        onClose={handleCloseMenu}
+      >
+        <MenuItem
+          onClick={() => {
+            if (menuDocId) navigate(`/documents/${menuDocId}`);
+            handleCloseMenu();
+          }}
+        >
+          View
+        </MenuItem>
+        {canManage && (
+          <MenuItem onClick={handleDeleteDocument} sx={{ color: "error.main" }}>
+            Delete
+          </MenuItem>
+        )}
+      </Menu>
     </Box>
   );
 }

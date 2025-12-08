@@ -57,7 +57,7 @@ function formatBooleanField(key, value) {
   return value;
 }
 
-// Make the JSON in a.details human-readable
+
 function formatActivityDetails(details) {
   if (!details) return "";
 
@@ -269,7 +269,7 @@ export default function AdminUsers() {
   // history dialog
   const [historyOpen, setHistoryOpen] = useState(false);
 
-  // kebab menu (3 dots)
+  // kebab menu
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [menuUser, setMenuUser] = useState(null);
 

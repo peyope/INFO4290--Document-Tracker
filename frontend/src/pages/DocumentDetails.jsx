@@ -1,50 +1,44 @@
-// frontend/src/pages/DocumentDetails.js
-import React, { useEffect, useMemo, useState } from "react";
+// frontend/src/pages/DocumentDetails.jsx
+import React, { useState, useEffect, useContext } from "react";
 import {
   Box,
   Paper,
   Typography,
+  TextField,
   Button,
   Stack,
+  CircularProgress,
   Alert,
-  Breadcrumbs,
-  Link as MLink,
-  TextField,
-  FormControl,
-  InputLabel,
-  Select,
+  Divider,
   MenuItem,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
   Table,
   TableHead,
   TableRow,
   TableCell,
   TableBody,
-  Chip,
 } from "@mui/material";
-import { Link, useParams } from "react-router-dom";
-import api from "../api/axiosConfig";
+import Autocomplete from "@mui/material/Autocomplete";
+import { useParams, useNavigate } from "react-router-dom";
+
 import {
   getDocument,
   updateDocument,
+  deleteDocument,
   uploadDocumentFile,
   deleteDocumentFile,
-  getDocumentFileUrl,
 } from "../services/documents";
-import { getLibraryColumns } from "../services/settings";
+import { listEmployees, formatEmployeeName } from "../services/employees";
+import { AuthContext } from "../context/AuthContext";
+import api from "../api/axiosConfig";
 
 const SITE_OPTIONS = ["Onsite", "Offsite"];
-const STATUS_OPTIONS = ["Available", "CheckedOut"];
 
-// layout offsets (match your sidebar + header)
-const SIDEBAR_WIDTH = 240;
-const HEADER_HEIGHT = 64;
+/* ---------- Audit helpers ---------- */
 
-// default retention window (years)
-const DEFAULT_RETENTION_YEARS = 10;
-
-/* ---------- helpers ---------- */
-
-// Nice labels for audit field names
 const AUDIT_FIELD_LABELS = {
   title: "Title",
   site: "Site",
@@ -58,137 +52,46 @@ const AUDIT_FIELD_LABELS = {
   owner_email: "File Lead Email",
   holder_name: "Checked-Out By",
   holder_email: "Checked-Out By Email",
+  destruction_approved_at: "Destruction Approved",
+  destruction_completed_at: "Destruction Completed",
+  retention_action: "Retention Action",
 };
 
-// Fields we should treat as dates for audit formatting
 const AUDIT_DATE_FIELDS = new Set([
   "file_closed_date",
   "due_at",
   "retention_date",
+  "destruction_approved_at",
+  "destruction_completed_at",
 ]);
 
-// Status labels
 const STATUS_LABELS = {
   Available: "Available",
   CheckedOut: "Checked Out",
+  Destroyed: "Destroyed",
 };
 
-function getStatusChip(status) {
-  if (!status) return <Chip label="Unknown" size="small" />;
-  if (status === "CheckedOut") {
-    return (
-      <Chip
-        label="Checked Out"
-        color="warning"
-        size="small"
-        variant="filled"
-      />
-    );
-  }
-  return (
-    <Chip label="Available" color="success" size="small" variant="filled" />
-  );
-}
-
-// Retention chip uses retention_date
-function getRetentionChip(doc) {
-  if (!doc?.retention_date) {
-    return (
-      <Chip
-        label="Retention not set"
-        size="small"
-        variant="outlined"
-        color="default"
-      />
-    );
-  }
-
-  const due = new Date(doc.retention_date);
-  if (Number.isNaN(due.getTime())) {
-    return (
-      <Chip
-        label="Invalid retention date"
-        size="small"
-        variant="outlined"
-        color="default"
-      />
-    );
-  }
-
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  due.setHours(0, 0, 0, 0);
-
-  const diffMs = due - today;
-  const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
-
-  if (diffDays < 0) {
-    return (
-      <Chip
-        label={`Overdue (${Math.abs(diffDays)}d)`}
-        size="small"
-        color="error"
-        variant="filled"
-      />
-    );
-  }
-  if (diffDays <= 30) {
-    return (
-      <Chip
-        label={`Due soon (${diffDays}d`}
-        size="small"
-        color="warning"
-        variant="filled"
-      />
-    );
-  }
-  return (
-    <Chip
-      label={`Due in ${diffDays}d`}
-      size="small"
-      color="success"
-      variant="outlined"
-    />
-  );
-}
-
-// Add N years to a YYYY-MM-DD string
-function addYearsToDateString(dateStr, years) {
-  if (!dateStr) return "";
-  const d = new Date(dateStr);
-  if (Number.isNaN(d.getTime())) return "";
-  d.setFullYear(d.getFullYear() + years);
-  return d.toISOString().slice(0, 10);
-}
-
-/**
- * Format a single value for audit display based on field type.
- */
 function formatAuditValue(field, raw) {
   if (raw === null || raw === undefined || raw === "") return "";
 
-  // Date-like fields
   if (AUDIT_DATE_FIELDS.has(field)) {
     const d = new Date(raw);
     if (!Number.isNaN(d.getTime())) {
-      // Show local date only (no long GMT string)
       return d.toLocaleDateString();
     }
   }
 
-  // Status
   if (field === "status") {
     return STATUS_LABELS[raw] || String(raw);
+  }
+
+  if (field === "retention_action") {
+    return String(raw).replace(/-/g, " ");
   }
 
   return String(raw);
 }
 
-/**
- * Format audit.details (entry.note) into human-readable multi-line text.
- * Handles JSON diffs created by logAudit (field -> { from, to }),
- * plain strings, and generic fallbacks.
- */
 function formatAuditDetails(entry) {
   const action = (entry.action || "").toLowerCase();
   const note = entry.note;
@@ -197,7 +100,7 @@ function formatAuditDetails(entry) {
     try {
       const parsed = JSON.parse(note);
 
-      // If it's our diff object (field -> { from, to })
+      // If it's diff object (field -> { from, to })
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
         const lines = [];
 
@@ -218,8 +121,11 @@ function formatAuditDetails(entry) {
 
             lines.push(`${label}: "${fromDisplay}" → "${toDisplay}"`);
           } else {
-            const label = AUDIT_FIELD_LABELS[field] || field;
-            lines.push(`${label}: ${String(change)}`);
+            lines.push(
+              `${field}: ${
+                typeof change === "string" ? change : JSON.stringify(change)
+              }`
+            );
           }
         }
 
@@ -228,7 +134,6 @@ function formatAuditDetails(entry) {
         }
       }
 
-      // If it's just a JSON string or something else, fallback
       if (typeof parsed === "string") return parsed;
       return JSON.stringify(parsed);
     } catch {
@@ -237,691 +142,847 @@ function formatAuditDetails(entry) {
     }
   }
 
-  // No note – generic descriptions by action
   if (action === "create") return "Document created";
   if (action === "update") return "Document details updated";
   if (action === "delete") return "Document deleted";
+  if (action === "retention-decision") return "Retention decision updated";
+  if (action === "destroyed")
+    return "Destruction confirmed and digital files removed.";
 
   return "—";
 }
 
+/* ---------- Component ---------- */
+
 export default function DocumentDetails() {
   const { id } = useParams();
+  const navigate = useNavigate();
+  const { user } = useContext(AuthContext);
 
-  const [doc, setDoc] = useState(null);
-  const [audit, setAudit] = useState([]);
+  const [documentData, setDocumentData] = useState(null);
+
   const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [successMsg, setSuccessMsg] = useState("");
 
-  const [editing, setEditing] = useState(false);
+  const [editMode, setEditMode] = useState(false);
+
+  const [employees, setEmployees] = useState([]);
+
   const [form, setForm] = useState({
     title: "",
-    site: "Onsite",
     location: "",
-    status: "Available",
+    site: "",
+    status: "",
     description: "",
-    file_closed_date: "",
     retention_date: "",
-    owner_name: "",
-    owner_email: "",
-    holder_name: "",
-    holder_email: "",
+    file_closed_date: "",
+    owner_id: null,
+    holder_id: null,
   });
 
-  const [files, setFiles] = useState([]);
-  const [fileErr, setFileErr] = useState("");
-  const [fileBusy, setFileBusy] = useState(false);
-  const [retentionYears, setRetentionYears] = useState(DEFAULT_RETENTION_YEARS);
-  const [columnVisibility, setColumnVisibility] = useState(null);
+  const [selectedOwner, setSelectedOwner] = useState(null);
+  const [selectedHolder, setSelectedHolder] = useState(null);
 
-  const createdAt = useMemo(
-    () => (doc?.created_at ? new Date(doc.created_at) : null),
-    [doc]
-  );
-  const updatedAt = useMemo(
-    () => (doc?.updated_at ? new Date(doc.updated_at) : null),
-    [doc]
-  );
+  const [fileUploadLoading, setFileUploadLoading] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
 
-  /* ---------- data loading ---------- */
+  const [retentionYears, setRetentionYears] = useState(10);
 
-  async function reloadAudit() {
+  const [audit, setAudit] = useState([]);
+
+  // Retention decision dialog state
+  const [retentionDialogOpen, setRetentionDialogOpen] = useState(false);
+  const [retentionDecision, setRetentionDecision] = useState("");
+  const [retentionNote, setRetentionNote] = useState("");
+  const [retentionNewDate, setRetentionNewDate] = useState("");
+  const [savingRetention, setSavingRetention] = useState(false);
+
+  // Confirm destruction dialog state
+  const [confirmDestroyOpen, setConfirmDestroyOpen] = useState(false);
+  const [confirmDestroyLoading, setConfirmDestroyLoading] = useState(false);
+
+  // Helper: add N years to YYYY-MM-DD
+  const addYearsToDate = (dateString, years) => {
+    if (!dateString) return "";
+    const parts = dateString.split("-");
+    if (parts.length !== 3) return dateString;
+
+    const baseYear = parseInt(parts[0], 10);
+    const yrOffset = Number(years) || 0;
+    if (!Number.isFinite(baseYear)) return dateString;
+
+    const year = baseYear + yrOffset;
+    const month = parts[1];
+    const day = parts[2];
+
+    return `${year}-${month}-${day}`;
+  };
+
+  // Load retention years from settings
+  useEffect(() => {
+    async function loadSettings() {
+      try {
+        const res = await api.get("/settings/system");
+        const rawYears = res?.data?.default_retention_years;
+        const num = Number(rawYears);
+        if (Number.isFinite(num) && num >= 0) {
+          setRetentionYears(num);
+        }
+      } catch (e) {
+        console.warn(
+          "Could not load retention settings, using default",
+          e?.message
+        );
+      }
+    }
+    loadSettings();
+  }, []);
+
+  // Reload audit separately (fallback / refresh)
+  const reloadAudit = async () => {
     try {
       const { data } = await api.get(`/audit/document/${id}`);
       setAudit(Array.isArray(data) ? data : []);
-    } catch {
-      setAudit([]);
-    }
-  }
-
-  async function load() {
-    setErr("");
-    setLoading(true);
-    try {
-      const { document, audit: fromRoute } = await getDocument(id);
-      if (!document) {
-        setErr("Document not found");
-        setDoc(null);
-        setAudit([]);
-        setFiles([]);
-        return;
-      }
-
-      setDoc(document);
-      setFiles(Array.isArray(document.files) ? document.files : []);
-
-      setForm({
-        title: document.title || "",
-        site: document.site || "Onsite",
-        location: document.location || "",
-        status: document.status || "Available",
-        description: document.description || "",
-        file_closed_date: document.file_closed_date
-          ? document.file_closed_date.substring(0, 10)
-          : "",
-        retention_date: document.retention_date
-          ? document.retention_date.substring(0, 10)
-          : "",
-        owner_name: document.owner_name || "",
-        owner_email: document.owner_email || "",
-        holder_name: document.holder_name || "",
-        holder_email: document.holder_email || "",
-      });
-
-      if (Array.isArray(fromRoute) && fromRoute.length) {
-        setAudit(fromRoute);
-      } else {
-        await reloadAudit();
-      }
     } catch (e) {
-      console.error("Load document error:", e);
-      setErr(e?.response?.data?.message || "Failed to load document.");
-      setDoc(null);
-      setAudit([]);
-      setFiles([]);
-    } finally {
-      setLoading(false);
+      console.warn("Failed to load audit log", e?.message);
     }
-  }
+  };
 
-  async function loadColumnSettings() {
-    try {
-      const data = await getLibraryColumns();
-      const cols = Array.isArray(data?.columns) ? data.columns : [];
-      const visibility = {};
-      for (const col of cols) {
-        visibility[col.id] = col.visible !== false;
-      }
-      setColumnVisibility(visibility);
-    } catch (e) {
-      console.error("Failed to load library column settings:", e);
-      setColumnVisibility(null);
+  /**
+   * Normalize server response from getDocument / updateDocument
+   * so the component always has:
+   *  - documentData: document row + files[]
+   *  - audit: audit entries
+   *  - form + selected owner/holder set
+   */
+  const applyDocumentResponse = (data, employeesList = null) => {
+    if (!data) return;
+
+    let doc = data.document || data;
+    const files = Array.isArray(data.files) ? data.files : [];
+    const auditFromRoute = Array.isArray(data.audit) ? data.audit : [];
+
+    doc = { ...doc, files };
+
+    setDocumentData(doc);
+    if (auditFromRoute.length) {
+      setAudit(auditFromRoute);
     }
-  }
 
-  async function loadSystemSettings() {
-    try {
-      const { data } = await api.get("/settings/system");
-      if (data && typeof data.default_retention_years === "number") {
-        setRetentionYears(data.default_retention_years);
-      }
-    } catch (e) {
-      console.error("Failed to load system settings:", e);
+    const list = employeesList || employees;
+
+    if (list && list.length) {
+      const ownerEmp = list.find((e) => e.id === doc.owner_id) || null;
+      const holderEmp = list.find((e) => e.id === doc.holder_id) || null;
+      setSelectedOwner(ownerEmp);
+      setSelectedHolder(holderEmp);
     }
-  }
 
+    setForm({
+      title: doc.title || "",
+      location: doc.location || "",
+      site: doc.site || "",
+      status: doc.status || "",
+      description: doc.description || "",
+      retention_date: doc.retention_date
+        ? String(doc.retention_date).split("T")[0]
+        : "",
+      file_closed_date: doc.file_closed_date
+        ? String(doc.file_closed_date).split("T")[0]
+        : "",
+      owner_id: doc.owner_id || null,
+      holder_id: doc.holder_id || null,
+    });
+
+    // Pre-fill retention dialog with current values
+    setRetentionDecision(doc.retention_action || "");
+    setRetentionNewDate(
+      doc.retention_date ? String(doc.retention_date).split("T")[0] : ""
+    );
+    setRetentionNote("");
+  };
+
+  // Load employees + document (+ audit)
   useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    async function fetchData() {
+      try {
+        const empList = await listEmployees({ includeInactive: false });
+        setEmployees(empList);
+
+        const data = await getDocument(id);
+        if (!data) {
+          setError("Document not found.");
+          setLoading(false);
+          return;
+        }
+
+        applyDocumentResponse(data, empList);
+
+        if (!data.audit || !data.audit.length) {
+          reloadAudit();
+        }
+      } catch (err) {
+        console.error(err);
+        setError("Failed to load document.");
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    fetchData();
+    
   }, [id]);
 
-  useEffect(() => {
-    loadColumnSettings();
-    loadSystemSettings();
-  }, []);
-
-  /* ---------- save / check in-out ---------- */
-
-  const onSave = async () => {
-    try {
-      setErr("");
-
-      const holderName = form.holder_name.trim();
-      const status = holderName ? "CheckedOut" : "Available";
-
-      const payload = {
-        title: form.title.trim(),
-        site: form.site,
-        location: form.location.trim(),
-        status,
-        description: form.description.trim(),
-        file_closed_date: form.file_closed_date || null,
-        retention_date: form.retention_date || null,
-        owner_name: form.owner_name.trim(),
-        owner_email: form.owner_email.trim(), // preserved, just not edited in UI
-        holder_name: holderName,
-        holder_email: form.holder_email.trim(), // preserved, just not edited in UI
-      };
-
-      const saved = await updateDocument(id, payload);
-      setDoc(saved);
-      setEditing(false);
-      await reloadAudit();
-    } catch (e) {
-      console.error("Save document error:", e);
-      setErr(e?.response?.data?.message || "Failed to save changes.");
-    }
+  const handleChange = (field) => (e) => {
+    setForm((prev) => ({
+      ...prev,
+      [field]: e.target.value,
+    }));
   };
 
-  /* ---------- digital file handlers ---------- */
+  // File Closed Date change → auto retention date + clear when empty
+  const handleClosedDateChange = (e) => {
+    const value = e.target.value;
 
-  const handleFileChange = async (event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    setFileErr("");
-    setFileBusy(true);
-    try {
-      const uploaded = await uploadDocumentFile(id, file);
-      setFiles((prev) => [uploaded, ...prev]);
-      await reloadAudit();
-    } catch (e) {
-      console.error("Upload file error:", e);
-      setFileErr(
-        e?.response?.data?.message || "Failed to upload digital document file."
-      );
-    } finally {
-      setFileBusy(false);
-      event.target.value = "";
-    }
-  };
-
-  const handleFileDelete = async (fileId) => {
-    if (!window.confirm("Remove this digital file?")) return;
-    setFileErr("");
-    setFileBusy(true);
-    try {
-      await deleteDocumentFile(id, fileId);
-      setFiles((prev) => prev.filter((f) => f.id !== fileId));
-      await reloadAudit();
-    } catch (e) {
-      console.error("Delete file error:", e);
-      setFileErr(
-        e?.response?.data?.message || "Failed to delete digital file."
-      );
-    } finally {
-      setFileBusy(false);
-    }
-  };
-
-  const handleDownload = (fileId) => {
-    const url = getDocumentFileUrl(id, fileId);
-    window.open(url, "_blank", "noopener,noreferrer");
-  };
-
-  /* ---------- retention helpers ---------- */
-
-  // Always recompute retention date when file closed date changes,
-  // using the retentionYears loaded from system settings.
-  const handleFileClosedChange = (value) => {
     setForm((prev) => {
-      const updated = { ...prev, file_closed_date: value };
-
-      if (value) {
-        const auto = addYearsToDateString(value, retentionYears);
-        if (auto) {
-          updated.retention_date = auto;
-        }
-      } else {
-        // if file closed date is cleared, also clear retention date
-        updated.retention_date = "";
+      if (!value) {
+        return {
+          ...prev,
+          file_closed_date: "",
+          retention_date: "",
+        };
       }
 
-      return updated;
+      const autoRetention = addYearsToDate(value, retentionYears);
+
+      return {
+        ...prev,
+        file_closed_date: value,
+        retention_date: autoRetention,
+      };
     });
   };
 
-  const isColumnVisible = (id) => {
-    if (!columnVisibility) return true; // if settings fail to load, show everything
-    const v = columnVisibility[id];
-    return v === undefined ? true : v;
+  const handleSave = async () => {
+    setSaving(true);
+    setError("");
+    setSuccessMsg("");
+
+    try {
+      const payload = {
+        ...form,
+        owner_id: selectedOwner ? selectedOwner.id : null,
+        holder_id: selectedHolder ? selectedHolder.id : null,
+      };
+
+      const updated = await updateDocument(id, payload);
+      applyDocumentResponse(updated);
+
+      setEditMode(false);
+      setSuccessMsg("Document updated successfully");
+
+      reloadAudit();
+    } catch (err) {
+      console.error(err);
+      setError("Failed to update document.");
+    } finally {
+      setSaving(false);
+    }
   };
 
-  /* ---------- render ---------- */
+  const handleFileUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setFileUploadLoading(true);
+    setError("");
+
+    try {
+      await uploadDocumentFile(id, file);
+      const refreshed = await getDocument(id);
+      applyDocumentResponse(refreshed);
+    } catch (err) {
+      console.error(err);
+      setError("Failed to upload file.");
+    } finally {
+      setFileUploadLoading(false);
+    }
+  };
+
+  const handleDeleteFile = async (fileId) => {
+    try {
+      await deleteDocumentFile(id, fileId);
+      const refreshed = await getDocument(id);
+      applyDocumentResponse(refreshed);
+    } catch (err) {
+      console.error(err);
+      setError("Failed to delete file.");
+    }
+  };
+
+  const handleDeleteDocument = async () => {
+    try {
+      await deleteDocument(id);
+      navigate("/library");
+    } catch (err) {
+      console.error(err);
+      setError("Failed to delete document.");
+    }
+  };
+
+  // Open retention decision dialog
+  const openRetentionDialog = () => {
+    setRetentionDialogOpen(true);
+    setSuccessMsg("");
+  };
+
+  // Save retention decision
+  const handleSaveRetentionDecision = async () => {
+    setSavingRetention(true);
+    setError("");
+    setSuccessMsg("");
+
+    try {
+      if (retentionDecision === "Extend" && !retentionNewDate) {
+        setError(
+          "Please select a new retention date when choosing 'Extend'."
+        );
+        setSavingRetention(false);
+        return;
+      }
+
+      const payload = {
+        decision: retentionDecision || null,
+        note: retentionNote || null,
+        new_retention_date:
+          retentionDecision === "Extend" ? retentionNewDate || null : null,
+      };
+
+      const { data } = await api.post(
+        `/documents/${id}/retention-decision`,
+        payload
+      );
+
+      applyDocumentResponse(data);
+      setSuccessMsg("Retention decision saved.");
+      setRetentionDialogOpen(false);
+      reloadAudit();
+    } catch (err) {
+      console.error(err);
+      setError("Failed to save retention decision.");
+    } finally {
+      setSavingRetention(false);
+    }
+  };
+
+  // Confirm destruction
+  const handleConfirmDestruction = async () => {
+    setConfirmDestroyLoading(true);
+    setError("");
+    setSuccessMsg("");
+
+    try {
+      const { data } = await api.post(
+        `/documents/${id}/confirm-destruction`
+      );
+
+      applyDocumentResponse(data);
+      setSuccessMsg("Destruction confirmed and files removed.");
+      setConfirmDestroyOpen(false);
+      reloadAudit();
+    } catch (err) {
+      console.error(err);
+      setError("Failed to confirm destruction.");
+    } finally {
+      setConfirmDestroyLoading(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <Box sx={{ mt: 10, textAlign: "center" }}>
+        <CircularProgress />
+      </Box>
+    );
+  }
+
+  if (!documentData) {
+    return (
+      <Box sx={{ mt: 10, textAlign: "center" }}>
+        <Typography color="error">Document not found.</Typography>
+      </Box>
+    );
+  }
+
+  const canManage =
+    user?.roles?.includes("Admin") ||
+    user?.roles?.includes("Manager") ||
+    user?.roles?.includes("Clerk") ||
+    user?.roles?.includes("SuperAdmin");
+
+  const downloadToken = window.localStorage.getItem("token") || "";
+
+  const ownerDisplay = selectedOwner
+    ? formatEmployeeName(selectedOwner)
+    : documentData.owner_name || "None";
+
+  const holderDisplay = selectedHolder
+    ? formatEmployeeName(selectedHolder)
+    : documentData.holder_name || "None";
+
+  const isDestroyAction = documentData.retention_action === "Destroy";
+  const destructionCompletedAt = documentData.destruction_completed_at;
+  const isDestroyed =
+    !!destructionCompletedAt || documentData.status === "Destroyed";
 
   return (
-    <Box
-      sx={{
-        ml: `${SIDEBAR_WIDTH + 16}px`,
-        pt: `${HEADER_HEIGHT + 16}px`,
-        pr: 3,
-        pl: 3,
-        pb: 3,
-        minHeight: "100vh",
-        boxSizing: "border-box",
-        backgroundColor: "background.default",
-      }}
-    >
-      {/* Breadcrumbs */}
-      <Breadcrumbs sx={{ mb: 1 }}>
-        <MLink
-          component={Link}
-          to="/dashboard"
-          underline="hover"
-          color="inherit"
-        >
-          Home
-        </MLink>
-        <MLink
-          component={Link}
-          to="/library"
-          underline="hover"
-          color="inherit"
-        >
-          Document Library
-        </MLink>
-        <Typography color="text.primary">
-          {doc?.title || (loading ? "Loading…" : "Document")}
-        </Typography>
-      </Breadcrumbs>
+    <Box sx={{ ml: { xs: 0, md: "240px" }, mt: "72px", p: 3 }}>
+      <Paper sx={{ p: 3 }}>
+        <Stack direction="row" justifyContent="space-between">
+          <Typography variant="h5">Document Details</Typography>
 
-      {/* Error */}
-      {err && (
-        <Alert severity="error" sx={{ mb: 2 }}>
-          {err}
-        </Alert>
-      )}
-
-      <Stack spacing={3}>
-        {/* HEADER CARD */}
-        <Paper sx={{ p: 2.5 }}>
-          <Stack
-            direction={{ xs: "column", sm: "row" }}
-            alignItems={{ xs: "flex-start", sm: "center" }}
-            justifyContent="space-between"
-            spacing={1.5}
-          >
-            <Box>
-              <Stack direction="row" spacing={1} alignItems="center">
-                <Typography variant="h5">
-                  {doc?.title || `Document #${doc?.id ?? ""}`}
-                </Typography>
-                {doc && isColumnVisible("status") && getStatusChip(doc.status)}
-                {doc &&
-                  isColumnVisible("retention") &&
-                  getRetentionChip(doc)}
-              </Stack>
-              {/* ID / Site line removed per your request */}
-            </Box>
-
-            <Stack direction="row" spacing={1}>
+          {canManage && !editMode && (
+            <Stack direction="row" spacing={2}>
               <Button
-                variant={editing ? "outlined" : "contained"}
-                onClick={() => setEditing((v) => !v)}
-                disabled={loading || !doc}
+                variant="outlined"
+                onClick={openRetentionDialog}
+                disabled={isDestroyed}
               >
-                {editing ? "Cancel Editing" : "Edit Document"}
+                Retention Decision
               </Button>
-            </Stack>
-          </Stack>
-        </Paper>
 
-        {/* DETAILS CARD */}
-        <Paper sx={{ p: 2.5 }}>
-          {!editing ? (
-            <Box
-              sx={{
-                display: "grid",
-                gridTemplateColumns: { xs: "1fr", sm: "220px 1fr" },
-                rowGap: 1.25,
-                columnGap: 2,
-                alignItems: "flex-start",
-              }}
-            >
-              <Typography color="text.secondary">Document ID</Typography>
-              <Typography>{doc?.id ?? "-"}</Typography>
-
-              {isColumnVisible("location") && (
-                <>
-                  <Typography color="text.secondary">
-                    Storage Location
-                  </Typography>
-                  <Typography>{doc?.location || "—"}</Typography>
-                </>
-              )}
-
-              {isColumnVisible("site") && (
-                <>
-                  <Typography color="text.secondary">Site</Typography>
-                  <Typography>{doc?.site || "—"}</Typography>
-                </>
-              )}
-
-              {isColumnVisible("status") && (
-                <>
-                  <Typography color="text.secondary">Status</Typography>
-                  <Typography>{doc?.status || "—"}</Typography>
-                </>
-              )}
-
-              {isColumnVisible("owner") && (
-                <>
-                  <Typography color="text.secondary">File Lead</Typography>
-                  <Typography>{doc?.owner_name || "—"}</Typography>
-                </>
-              )}
-
-              {isColumnVisible("holder") && (
-                <>
-                  <Typography color="text.secondary">Checked-Out By</Typography>
-                  <Typography>{doc?.holder_name || "—"}</Typography>
-                </>
-              )}
-
-              <Typography color="text.secondary">File Closed Date</Typography>
-              <Typography>
-                {doc?.file_closed_date
-                  ? new Date(doc.file_closed_date).toLocaleDateString()
-                  : "Not set"}
-              </Typography>
-
-              {isColumnVisible("retention") && (
-                <>
-                  <Typography color="text.secondary">Retention Date</Typography>
-                  <Typography>
-                    {doc?.retention_date
-                      ? new Date(doc.retention_date).toLocaleDateString()
-                      : "Not set"}
-                  </Typography>
-                </>
-              )}
-
-              <Typography color="text.secondary">Description</Typography>
-              <Typography sx={{ whiteSpace: "pre-wrap" }}>
-                {doc?.description || "—"}
-              </Typography>
-
-              <Typography color="text.secondary">Created</Typography>
-              <Typography>
-                {createdAt ? createdAt.toLocaleString() : "—"}
-              </Typography>
-
-              <Typography color="text.secondary">Last Updated</Typography>
-              <Typography>
-                {updatedAt ? updatedAt.toLocaleString() : "—"}
-              </Typography>
-            </Box>
-          ) : (
-            <Box component="form" onSubmit={(e) => e.preventDefault()}>
-              <Box
-                sx={{
-                  display: "grid",
-                  gridTemplateColumns: { xs: "1fr", sm: "220px 1fr" },
-                  rowGap: 1.5,
-                  columnGap: 2,
-                  alignItems: "center",
-                }}
-              >
-                <Typography color="text.secondary">Title</Typography>
-                <TextField
-                  value={form.title}
-                  onChange={(e) =>
-                    setForm((f) => ({ ...f, title: e.target.value }))
-                  }
-                  fullWidth
-                />
-
-                {isColumnVisible("location") && (
-                  <>
-                    <Typography color="text.secondary">
-                      Storage Location
-                    </Typography>
-                    <TextField
-                      value={form.location}
-                      onChange={(e) =>
-                        setForm((f) => ({ ...f, location: e.target.value }))
-                      }
-                      fullWidth
-                    />
-                  </>
-                )}
-
-                {isColumnVisible("site") && (
-                  <>
-                    <Typography color="text.secondary">Site</Typography>
-                    <FormControl fullWidth>
-                      <InputLabel id="site-label">Site</InputLabel>
-                      <Select
-                        labelId="site-label"
-                        label="Site"
-                        value={form.site}
-                        onChange={(e) =>
-                          setForm((f) => ({ ...f, site: e.target.value }))
-                        }
-                      >
-                        {SITE_OPTIONS.map((s) => (
-                          <MenuItem key={s} value={s}>
-                            {s}
-                          </MenuItem>
-                        ))}
-                      </Select>
-                    </FormControl>
-                  </>
-                )}
-
-                {isColumnVisible("owner") && (
-                  <>
-                    <Typography color="text.secondary">File Lead</Typography>
-                    <TextField
-                      value={form.owner_name}
-                      onChange={(e) =>
-                        setForm((f) => ({ ...f, owner_name: e.target.value }))
-                      }
-                      fullWidth
-                    />
-                  </>
-                )}
-
-                {isColumnVisible("holder") && (
-                  <>
-                    <Typography color="text.secondary">
-                      Checked-Out By
-                    </Typography>
-                    <TextField
-                      value={form.holder_name}
-                      onChange={(e) =>
-                        setForm((f) => ({ ...f, holder_name: e.target.value }))
-                      }
-                      fullWidth
-                    />
-                  </>
-                )}
-
-                <Typography color="text.secondary">File Closed Date</Typography>
-                <TextField
-                  type="date"
-                  value={form.file_closed_date}
-                  onChange={(e) => handleFileClosedChange(e.target.value)}
-                  InputLabelProps={{ shrink: true }}
-                  fullWidth
-                />
-
-                {isColumnVisible("retention") && (
-                  <>
-                    <Typography color="text.secondary">
-                      Retention Date
-                    </Typography>
-                    <TextField
-                      type="date"
-                      value={form.retention_date}
-                      onChange={(e) =>
-                        setForm((f) => ({
-                          ...f,
-                          retention_date: e.target.value,
-                        }))
-                      }
-                      InputLabelProps={{ shrink: true }}
-                      fullWidth
-                    />
-                  </>
-                )}
-
-                <Typography color="text.secondary">Description</Typography>
-                <TextField
-                  value={form.description}
-                  onChange={(e) =>
-                    setForm((f) => ({ ...f, description: e.target.value }))
-                  }
-                  multiline
-                  minRows={3}
-                  fullWidth
-                />
-              </Box>
-
-              <Stack direction="row" spacing={2} sx={{ mt: 3 }}>
+              {isDestroyAction && !isDestroyed && (
                 <Button
                   variant="contained"
-                  color="primary"
-                  onClick={onSave}
-                  disabled={loading}
+                  color="error"
+                  onClick={() => setConfirmDestroyOpen(true)}
                 >
-                  Save Changes
+                  Confirm Destruction Completed
                 </Button>
-                <Button
-                  variant="outlined"
-                  onClick={() => setEditing(false)}
-                  disabled={loading}
+              )}
+
+              <Button
+                variant="contained"
+                onClick={() => setEditMode(true)}
+                disabled={isDestroyed}
+              >
+                Edit
+              </Button>
+
+              <Button
+                variant="outlined"
+                color="error"
+                onClick={() => setDeleteDialogOpen(true)}
+              >
+                Delete
+              </Button>
+            </Stack>
+          )}
+        </Stack>
+
+        <Divider sx={{ my: 2 }} />
+
+        {error && (
+          <Alert severity="error" sx={{ mb: 2 }}>
+            {error}
+          </Alert>
+        )}
+        {successMsg && (
+          <Alert severity="success" sx={{ mb: 2 }}>
+            {successMsg}
+          </Alert>
+        )}
+
+        {/* VIEW MODE */}
+        {!editMode ? (
+          <Box>
+            <Typography variant="h6" gutterBottom>
+              {documentData.title}
+            </Typography>
+
+            <Typography>
+              <strong>Location:</strong> {documentData.location || "—"}
+            </Typography>
+            <Typography>
+              <strong>Site:</strong> {documentData.site || "—"}
+            </Typography>
+            <Typography>
+              <strong>Status:</strong>{" "}
+              {STATUS_LABELS[documentData.status] || documentData.status}
+            </Typography>
+            <Typography sx={{ mt: 1 }}>
+              <strong>Description:</strong> {documentData.description || "—"}
+            </Typography>
+
+            <Typography sx={{ mt: 1 }}>
+              <strong>Retention Date:</strong>{" "}
+              {documentData.retention_date
+                ? String(documentData.retention_date).split("T")[0]
+                : "—"}
+            </Typography>
+
+            <Typography sx={{ mt: 1 }}>
+              <strong>File Closed Date:</strong>{" "}
+              {documentData.file_closed_date
+                ? String(documentData.file_closed_date).split("T")[0]
+                : "—"}
+            </Typography>
+
+            <Typography sx={{ mt: 1 }}>
+              <strong>Retention Action:</strong>{" "}
+              {documentData.retention_action
+                ? String(documentData.retention_action).replace(/-/g, " ")
+                : "—"}
+            </Typography>
+
+            <Typography sx={{ mt: 1 }}>
+              <strong>Destruction Approved:</strong>{" "}
+              {documentData.destruction_approved_at
+                ? new Date(
+                    documentData.destruction_approved_at
+                  ).toLocaleDateString()
+                : "—"}
+            </Typography>
+
+            <Typography sx={{ mt: 1 }}>
+              <strong>Destruction Completed:</strong>{" "}
+              {documentData.destruction_completed_at
+                ? new Date(
+                    documentData.destruction_completed_at
+                  ).toLocaleDateString()
+                : "—"}
+            </Typography>
+
+            <Typography sx={{ mt: 1 }}>
+              <strong>File Lead:</strong> {ownerDisplay}
+            </Typography>
+
+            <Typography sx={{ mt: 1 }}>
+              <strong>Checked-Out By:</strong> {holderDisplay}
+            </Typography>
+
+            {/* Files */}
+            <Typography variant="h6" sx={{ mt: 3 }}>
+              Files
+            </Typography>
+
+            {documentData.files && documentData.files.length > 0 ? (
+              documentData.files.map((file) => (
+                <Stack
+                  key={file.id}
+                  direction="row"
+                  spacing={2}
+                  alignItems="center"
+                  sx={{ mt: 1 }}
                 >
+                  <a
+                    href={`http://localhost:5000/api/documents/${documentData.id}/files/${file.id}?token=${encodeURIComponent(
+                      downloadToken
+                    )}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    {file.file_name}
+                  </a>
+
+                  {canManage && !isDestroyed && (
+                    <Button
+                      size="small"
+                      color="error"
+                      onClick={() => handleDeleteFile(file.id)}
+                    >
+                      Delete
+                    </Button>
+                  )}
+                </Stack>
+              ))
+            ) : (
+              <Typography>No files uploaded.</Typography>
+            )}
+
+            {canManage && !isDestroyed && (
+              <Box sx={{ mt: 2 }}>
+                <Button variant="contained" component="label">
+                  Upload File
+                  <input hidden type="file" onChange={handleFileUpload} />
+                </Button>
+                {fileUploadLoading && (
+                  <CircularProgress size={20} sx={{ ml: 1 }} />
+                )}
+              </Box>
+            )}
+          </Box>
+        ) : (
+          // EDIT MODE
+          <Box>
+            <Stack spacing={2} sx={{ mt: 1 }}>
+              <TextField
+                label="Title"
+                fullWidth
+                value={form.title}
+                onChange={handleChange("title")}
+              />
+
+              <TextField
+                label="Location"
+                fullWidth
+                value={form.location}
+                onChange={handleChange("location")}
+              />
+
+              <TextField
+                select
+                label="Site"
+                fullWidth
+                value={form.site}
+                onChange={handleChange("site")}
+              >
+                {SITE_OPTIONS.map((s) => (
+                  <MenuItem key={s} value={s}>
+                    {s}
+                  </MenuItem>
+                ))}
+              </TextField>
+
+              <TextField
+                label="Description"
+                fullWidth
+                multiline
+                rows={3}
+                value={form.description}
+                onChange={handleChange("description")}
+              />
+
+              <Stack direction="row" spacing={2}>
+                <TextField
+                  type="date"
+                  label="Retention Date"
+                  InputLabelProps={{ shrink: true }}
+                  fullWidth
+                  value={form.retention_date || ""}
+                  onChange={handleChange("retention_date")}
+                />
+
+                <TextField
+                  type="date"
+                  label="File Closed Date"
+                  InputLabelProps={{ shrink: true }}
+                  fullWidth
+                  value={form.file_closed_date || ""}
+                  onChange={handleClosedDateChange}
+                />
+              </Stack>
+
+              <Autocomplete
+                options={employees}
+                getOptionLabel={(opt) => formatEmployeeName(opt)}
+                value={selectedOwner}
+                onChange={(e, v) => setSelectedOwner(v)}
+                renderInput={(params) => (
+                  <TextField {...params} label="File Lead" placeholder="None" />
+                )}
+                isOptionEqualToValue={(opt, val) => opt.id === val?.id}
+              />
+
+              <Autocomplete
+                options={employees}
+                getOptionLabel={(opt) => formatEmployeeName(opt)}
+                value={selectedHolder}
+                onChange={(e, v) => setSelectedHolder(v)}
+                renderInput={(params) => (
+                  <TextField
+                    {...params}
+                    label="Checked-Out By"
+                    placeholder="None"
+                  />
+                )}
+                isOptionEqualToValue={(opt, val) => opt.id === val?.id}
+              />
+
+              <Stack direction="row" spacing={2} sx={{ mt: 2 }}>
+                <Button
+                  variant="contained"
+                  onClick={handleSave}
+                  disabled={saving}
+                >
+                  {saving ? "Saving..." : "Save"}
+                </Button>
+
+                <Button variant="outlined" onClick={() => setEditMode(false)}>
                   Cancel
                 </Button>
               </Stack>
-            </Box>
-          )}
-        </Paper>
+            </Stack>
+          </Box>
+        )}
+      </Paper>
 
-        {/* DIGITAL FILES */}
-        <Paper sx={{ p: 2.5 }}>
-          <Stack
-            direction={{ xs: "column", sm: "row" }}
-            alignItems={{ xs: "flex-start", sm: "center" }}
-            justifyContent="space-between"
-            sx={{ mb: 1.5 }}
-            spacing={1.5}
-          >
-            <Typography variant="h6">Digital Files</Typography>
-            <Button
-              variant="outlined"
-              component="label"
-              disabled={fileBusy || !doc}
-            >
-              Upload File
-              <input
-                type="file"
-                hidden
-                onChange={handleFileChange}
-                disabled={fileBusy || !doc}
-              />
-            </Button>
-          </Stack>
-
-          {fileErr && (
-            <Alert severity="error" sx={{ mb: 2 }}>
-              {fileErr}
-            </Alert>
-          )}
-
-          {files.length === 0 ? (
-            <Typography color="text.secondary">
-              No digital files attached.
-            </Typography>
-          ) : (
-            <Table size="small">
-              <TableHead>
-                <TableRow>
-                  <TableCell>File Name</TableCell>
-                  <TableCell>Uploaded At</TableCell>
-                  <TableCell align="right">Actions</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {files.map((f) => (
-                  <TableRow key={f.id}>
-                    <TableCell>{f.filename}</TableCell>
-                    <TableCell>
-                      {f.uploaded_at
-                        ? new Date(f.uploaded_at).toLocaleString()
-                        : "—"}
-                    </TableCell>
-                    <TableCell align="right">
-                      <Stack
-                        direction="row"
-                        spacing={1}
-                        justifyContent="flex-end"
-                      >
-                        <Button
-                          size="small"
-                          onClick={() => handleDownload(f.id)}
-                        >
-                          Download
-                        </Button>
-                        <Button
-                          size="small"
-                          color="error"
-                          onClick={() => handleFileDelete(f.id)}
-                          disabled={fileBusy}
-                        >
-                          Delete
-                        </Button>
-                      </Stack>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </Paper>
-
-        {/* AUDIT LOG */}
-        <Paper sx={{ p: 2.5, mb: 4 }}>
-          <Typography variant="h6" sx={{ mb: 1.5 }}>
-            Audit Log
+      {/* Retention Decision Dialog */}
+      <Dialog
+        open={retentionDialogOpen}
+        onClose={() => !savingRetention && setRetentionDialogOpen(false)}
+        fullWidth
+        maxWidth="sm"
+      >
+        <DialogTitle>Retention Decision</DialogTitle>
+        <DialogContent sx={{ pt: 2 }}>
+          <Typography variant="body2" sx={{ mb: 2 }}>
+            Record what should happen when this file reaches its retention end
+            date.
           </Typography>
-          {audit.length === 0 ? (
-            <Typography color="text.secondary">
-              No audit entries recorded yet.
-            </Typography>
-          ) : (
-            <Table size="small">
-              <TableHead>
-                <TableRow>
-                  <TableCell>When</TableCell>
-                  <TableCell>By</TableCell>
-                  <TableCell>Action</TableCell>
-                  <TableCell>Details</TableCell>
+
+          <Stack spacing={2}>
+            <TextField
+              select
+              label="Decision"
+              fullWidth
+              value={retentionDecision}
+              onChange={(e) => setRetentionDecision(e.target.value)}
+            >
+              <MenuItem value="">No decision</MenuItem>
+              <MenuItem value="Destroy">Destroy / Dispose</MenuItem>
+              <MenuItem value="Extend">Extend retention</MenuItem>
+              <MenuItem value="Archive">Archive / Keep</MenuItem>
+            </TextField>
+
+            {retentionDecision === "Extend" && (
+              <TextField
+                type="date"
+                label="New retention date"
+                InputLabelProps={{ shrink: true }}
+                fullWidth
+                value={retentionNewDate || ""}
+                onChange={(e) => setRetentionNewDate(e.target.value)}
+              />
+            )}
+
+            <TextField
+              label="Notes (optional)"
+              fullWidth
+              multiline
+              minRows={2}
+              value={retentionNote}
+              onChange={(e) => setRetentionNote(e.target.value)}
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => setRetentionDialogOpen(false)}
+            disabled={savingRetention}
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={handleSaveRetentionDecision}
+            variant="contained"
+            disabled={savingRetention}
+          >
+            {savingRetention ? "Saving…" : "Save decision"}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Confirm Destruction Dialog */}
+      <Dialog
+        open={confirmDestroyOpen}
+        onClose={() => !confirmDestroyLoading && setConfirmDestroyOpen(false)}
+      >
+        <DialogTitle>Confirm Destruction Completed</DialogTitle>
+        <DialogContent>
+          This will permanently remove all digital files for this document and
+          mark it as <strong>Destroyed</strong> in the system. Physical
+          destruction should already have taken place.
+          <br />
+          <br />
+          Are you sure you want to continue?
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => setConfirmDestroyOpen(false)}
+            disabled={confirmDestroyLoading}
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={handleConfirmDestruction}
+            color="error"
+            variant="contained"
+            disabled={confirmDestroyLoading}
+          >
+            {confirmDestroyLoading ? "Processing…" : "Yes, confirm destruction"}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* AUDIT LOG */}
+      <Paper sx={{ p: 3, mt: 3 }}>
+        <Typography variant="h6" sx={{ mb: 1.5 }}>
+          Audit Log
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          Shows recent changes made to this document&apos;s details.
+        </Typography>
+
+        {!audit.length ? (
+          <Typography variant="body2" color="text.secondary">
+            No audit entries recorded yet.
+          </Typography>
+        ) : (
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell>When</TableCell>
+                <TableCell>By</TableCell>
+                <TableCell>Action</TableCell>
+                <TableCell>Details</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {audit.map((entry) => (
+                <TableRow key={entry.id}>
+                  <TableCell>
+                    {entry.created_at
+                      ? new Date(entry.created_at).toLocaleString()
+                      : "—"}
+                  </TableCell>
+                  <TableCell>
+                    {entry.actor_email || entry.actor_name || "—"}
+                  </TableCell>
+                  <TableCell>{entry.action}</TableCell>
+                  <TableCell sx={{ whiteSpace: "pre-wrap" }}>
+                    {formatAuditDetails(entry)}
+                  </TableCell>
                 </TableRow>
-              </TableHead>
-              <TableBody>
-                {audit.map((entry) => (
-                  <TableRow key={entry.id}>
-                    <TableCell>
-                      {entry.created_at
-                        ? new Date(entry.created_at).toLocaleString()
-                        : "—"}
-                    </TableCell>
-                    <TableCell>
-                      {entry.actor_email || entry.actor_name || "—"}
-                    </TableCell>
-                    <TableCell>{entry.action}</TableCell>
-                    <TableCell sx={{ whiteSpace: "pre-wrap" }}>
-                      {formatAuditDetails(entry)}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </Paper>
-      </Stack>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </Paper>
+
+      {/* Delete document dialog */}
+      <Dialog
+        open={deleteDialogOpen}
+        onClose={() => setDeleteDialogOpen(false)}
+      >
+        <DialogTitle>Delete Document?</DialogTitle>
+        <DialogContent>
+          Are you sure you want to permanently delete this document? This action
+          cannot be undone.
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteDialogOpen(false)}>Cancel</Button>
+          <Button
+            onClick={handleDeleteDocument}
+            variant="contained"
+            color="error"
+          >
+            Delete
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

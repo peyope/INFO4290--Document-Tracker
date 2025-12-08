@@ -11,7 +11,6 @@ import { AuthProvider } from "./context/AuthContext";
 import Header from "./components/Header";
 import LeftNav from "./components/LeftNav";
 import ProtectedRoute from "./components/ProtectedRoute";
-
 import Login from "./pages/Login";
 import Register from "./pages/Register";
 import Dashboard from "./pages/Dashboard";
@@ -19,6 +18,7 @@ import Library from "./pages/Library";
 import DocumentDetails from "./pages/DocumentDetails";
 import AdminUsers from "./pages/AdminUsers";
 import ChangePassword from "./pages/ChangePassword";
+import Employees from "./pages/Employees";
 
 // Wrapper that decides when to show the sidebar
 function RouterWithChrome() {
@@ -36,10 +36,8 @@ function RouterWithChrome() {
       {/* Show sidebar only on “inside app” routes */}
       {!isAuthRoute && <LeftNav />}
 
-      {/* Main route content; individual pages handle their own margins
-          (they already use ml: 240px and pt: 64px) */}
       <Routes>
-        {/* Public / auth routes */}
+        {/* Public auth routes */}
         <Route path="/" element={<Login />} />
         <Route path="/register" element={<Register />} />
 
@@ -52,6 +50,7 @@ function RouterWithChrome() {
             </ProtectedRoute>
           }
         />
+
         <Route
           path="/library"
           element={
@@ -60,6 +59,7 @@ function RouterWithChrome() {
             </ProtectedRoute>
           }
         />
+
         <Route
           path="/documents/:id"
           element={
@@ -68,6 +68,16 @@ function RouterWithChrome() {
             </ProtectedRoute>
           }
         />
+
+        <Route
+          path="/employees"
+          element={
+            <ProtectedRoute>
+              <Employees />
+            </ProtectedRoute>
+          }
+        />
+
         <Route
           path="/admin/users"
           element={
@@ -76,6 +86,7 @@ function RouterWithChrome() {
             </ProtectedRoute>
           }
         />
+
         <Route
           path="/change-password"
           element={
